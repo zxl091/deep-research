@@ -3,7 +3,7 @@ $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 $script:RuntimeDir = Join-Path $script:ProjectRoot '.runtime'
 $script:StatePath = Join-Path $script:RuntimeDir 'services.json'
 $script:Settings = Import-PowerShellDataFile (Join-Path $script:ProjectRoot 'services.local.psd1')
-$script:Containers = @('industry_postgres','industry_redis','industry_etcd','industry_minio','industry_milvus','industry_elasticsearch')
+$script:Containers = @('industry_postgres','industry_redis','industry_etcd','industry_minio','industry_milvus')
 
 function Read-ServiceState {
     $state = @{ backend = $null; frontend = $null }

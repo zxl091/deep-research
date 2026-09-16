@@ -76,7 +76,7 @@ export default function ChunksDrawer({
         <Empty description="暂无切片数据" />
       ) : (
         <div className={styles.chunkList}>
-          {chunks.map((chunk, index) => (
+          {chunks.map(chunk => (
             <div key={chunk.index} className={styles.chunkItem}>
               <div className={styles.chunkHeader}>
                 <Tag color="purple">#{chunk.index + 1}</Tag>

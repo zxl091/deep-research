@@ -1,54 +1,19 @@
-# 行业信息助手 - 前端
+# DeepResearch 前端
 
-## 快速开始
+React + TypeScript + Vite，包含研究工作台、知识库、会话与记忆、数据库探索及登录页面。
 
-### 环境要求
-- Node.js >= 18
-- npm >= 9
+准备 Node.js 环境和项目依赖后，将 `.env.example` 复制为 `.env`。默认 API 前缀为 `/api`，Vite 代理到 `http://127.0.0.1:8000`。
 
-### 安装与运行
-
-```bash
-# 1. 安装依赖
-npm install --legacy-peer-deps
-
-# 2. 启动开发服务器
+```powershell
 npm run dev
+npm run build
 ```
 
-启动成功后访问 http://localhost:5173/
+开发地址：`http://127.0.0.1:5183/`。本机统一启停入口位于项目根目录。
 
-### 常见问题
+- `src/pages/research/`：研究工作台、报告和摘要管理。
+- `src/pages/knowledge/`：文档上传、处理状态与切片查看。
+- `src/pages/database/`：业务数据浏览与自然语言查询。
+- `tests/`：独立的界面回归与 README 演示入口，使用模拟数据。
 
-#### macOS/Linux 权限问题
-
-如果遇到 `Permission denied` 错误，运行：
-
-```bash
-chmod +x node_modules/.bin/*
-```
-
-然后重新执行 `npm run dev`
-
-#### Windows 用户
-
-如遇权限问题，请以管理员身份运行终端。
-
----
-
-## 技术栈
-
-- React 19
-- TypeScript
-- Vite
-- Ant Design 5
-- React Router 6
-
-## 可用命令
-
-| 命令 | 说明 |
-|------|------|
-| `npm run dev` | 启动开发服务器 |
-| `npm run build` | 构建生产版本 |
-| `npm run preview` | 预览生产版本 |
-| `npm run lint` | 运行代码检查 |
+更多说明见 [项目 README](../README.md)。

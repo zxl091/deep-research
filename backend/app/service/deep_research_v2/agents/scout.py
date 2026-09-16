@@ -201,10 +201,6 @@ URL: {url}
         if state["phase"] not in [ResearchPhase.PLANNING.value, ResearchPhase.RESEARCHING.value]:
             return state
 
-        # 自动识别并获取股票数据
-        if state.get("search_web", True):
-            await self._fetch_stock_data_if_relevant(state)
-
         state["phase"] = ResearchPhase.RESEARCHING.value
 
         # 获取搜索模式配置
@@ -378,94 +374,6 @@ URL: {url}
         state["phase"] = ResearchPhase.WRITING.value
 
         return state
-
-    async def _fetch_stock_data_if_relevant(self, state: ResearchState) -> None:
-        """
-        自动识别查询中的上市公司，获取实时股票数据
-
-        当用户查询涉及上市公司时（如"茅台怎么样"），自动获取股票行情并添加到数据点
-        """
-        try:
-            try:
-                from config.stock_mapping import find_company_in_query
-                from service.stock_service import get_stock_service
-            except ImportError:
-                from app.config.stock_mapping import find_company_in_query
-                from app.service.stock_service import get_stock_service
-
-            query = state.get("query", "")
-            found_companies = find_company_in_query(query)
-
-            if not found_companies:
-                return
-
-            stock_service = get_stock_service()
-
-            for company_name, stock_code in found_companies[:2]:  # 最多查询2只股票
-                self.logger.info(f"检测到上市公司: {company_name} ({stock_code})")
-
-                result = await stock_service.get_stock_by_code(stock_code)
-
-                if result.get("success"):
-                    data = result["data"]
-
-                    # 添加到 data_points
-                    if "data_points" not in state:
-                        state["data_points"] = []
-
-                    state["data_points"].extend([
-                        {
-                            "name": f"{data['name']}当前股价",
-                            "value": float(data['nowPri']) if data['nowPri'] else 0,
-                            "unit": "元",
-                            "source": "聚合数据股票API",
-                            "source_type": "realtime"
-                        },
-                        {
-                            "name": f"{data['name']}涨跌幅",
-                            "value": data['increPer'],
-                            "unit": "%",
-                            "source": "聚合数据股票API",
-                            "source_type": "realtime"
-                        },
-                        {
-                            "name": f"{data['name']}今日成交量",
-                            "value": data['traAmount'],
-                            "unit": "手",
-                            "source": "聚合数据股票API",
-                            "source_type": "realtime"
-                        },
-                    ])
-
-                    # 发送实时行情消息
-                    self.add_message(state, "stock_quote", {
-                        "agent": self.name,
-                        "code": stock_code,
-                        "name": data['name'],
-                        "price": data['nowPri'],
-                        "change": data['increase'],
-                        "change_percent": data['increPer'],
-                        "high": data['todayMax'],
-                        "low": data['todayMin'],
-                        "volume": data['traAmount'],
-                        "turnover": data['traNumber'],
-                        "open": data['todayStartPri'],
-                        "prev_close": data['yestodEndPri']
-                    })
-
-                    self.add_message(state, "thought", {
-                        "agent": self.name,
-                        "content": f"已获取 {data['name']} 实时行情：¥{data['nowPri']} ({data['increPer']})"
-                    })
-
-                    self.logger.info(f"获取股票数据成功: {data['name']} ¥{data['nowPri']}")
-                else:
-                    self.logger.warning(f"获取股票数据失败: {stock_code} - {result.get('error')}")
-
-        except ImportError as e:
-            self.logger.warning(f"股票模块导入失败: {e}")
-        except Exception as e:
-            self.logger.error(f"获取股票数据异常: {e}")
 
     async def _analyze_supplementary_results(
         self,

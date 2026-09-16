@@ -1,81 +1,15 @@
-# 项目启动
-## 启动中间件
-cd backend
-docker compose -f docker-compose-base.yml up -d
+# DeepResearch 后端
 
-### 查看中间件状态
-```sh
-$ docker ps
-CONTAINER ID   IMAGE                                    COMMAND                  CREATED          STATUS                             PORTS                              NAMES
-...            redis:7-alpine                           "docker-entrypoint.s…"   ...              Up                                 0.0.0.0:6379->6379/tcp             document-redis
-...            milvusdb/milvus:v2.3.3                   "milvus run standalo…"   ...              Up                                 0.0.0.0:19530->19530/tcp           milvus-standalone
-...            minio/minio:RELEASE.2023-03-20T20-16-18Z "minio server /minio…"   ...              Up                                 0.0.0.0:9000-9001->9000-9001/tcp   milvus-minio
-...            quay.io/coreos/etcd:v3.5.5               "etcd -advertise-cli…"   ...              Up                                                                    milvus-etcd
-```
+应用入口：`app/app_main.py`。统一依赖声明：`requirements.txt`。
 
-## 安装python依赖包
-pip install -r requirements.txt
+当前发布接口包括登录认证、会话管理、知识库、数据库探索和 `/assistant` 研究运行时。六角色编排位于 `app/service/assistant/full_research.py`，阶段持久化、取消和恢复位于 `runtime.py`。
 
-## 修改env文件
-填入个人的DASHSCOPE_API_KEY，SERPER_API_KEY
-SERPER_API_KEY获取方法参考：https://serper.dev/
+本机启停使用项目根目录的 PowerShell 脚本。首次配置需准备 Python 环境及依赖，将 `.env.example` 复制为 `.env` 并填写服务参数。
 
-配置 Milvus 连接（可选，默认 localhost:19530）：
-```
-MILVUS_HOST=localhost
-MILVUS_PORT=19530
-```
+在已配置环境中，从本目录运行后端：
 
-配置 DocMind 文档解析服务：
-```
-DOCMIND_ACCESS_KEY_ID=your_access_key_id
-DOCMIND_ACCESS_KEY_SECRET=your_access_key_secret
-```
-
-# 临时添加环境变量
-# 用您的百炼API Key代替YOUR_DASHSCOPE_API_KEY
-export DASHSCOPE_API_KEY="YOUR_DASHSCOPE_API_KEY"
-
-## 启动后端服务
+```powershell
 python app/app_main.py
-
-
-# 接口测试
-### 上传文档,用于本地知识库的查询
-```sh
-cd backend
-curl -X POST "http://localhost:8000/documents/upload"   -H "Content-Type: multipart/form-data"   -F "file=@./test/test_doc.pdf"
-
-{"status":"success","message":"成功处理 25 个切片","document_count":25}
 ```
 
-### 创建会话
-```sh
-curl -s -X POST http://localhost:8000/chat/session
-
-{"session_id":"02c32f19-b7f0-42ea-b3c1-7d2bc148c21b","created_at":1751194296,"updated_at":1751194296,"message_count":0}
-```
-
-### 问答
-```sh
-curl -N -X POST http://localhost:8000/chat/completion \
-  -H "Content-Type: application/json" \
-  -H "Accept: text/event-stream" \
-  -d "{
-    \"session_id\": \"02c32f19-b7f0-42ea-b3c1-7d2bc148c21b\",
-    \"question\": \"如何解决dify_setups表不存在的问题？\"
-  }"
-
-```
-
-
-### deepseach
-```sh
-curl -N -X POST "http://localhost:8000/research/stream" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "安责险在矿山行业的应用现状、面临的主要挑战以及改进建议有哪些？",
-    "max_iterations": 2
-  }'
-
-```
+数据库依赖统一由根目录 `docker-compose.yml` 描述；执行分析代码使用 `sandbox/` 中的独立 Docker 镜像。完整架构与测试入口见 [项目 README](../README.md)。

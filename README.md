@@ -52,7 +52,7 @@ flowchart TB
     CHART --> BOX[Docker 隔离执行]
 ```
 
-当前入口采用 **自定义 Python 异步状态机**，复用六类专业角色。主要阶段按依赖顺序执行，检索阶段按章节分批并发。旧版 LangGraph 实现保留在代码中，当前主链路由 `assistant/full_research.py` 编排。
+系统由 **Python 异步状态机**统一调度规划、检索、分析、绘图、写作和审核六类 Agent。主要阶段按依赖顺序执行，章节检索分批并发；审核结果驱动补充检索或内容修订。研究编排入口为 [`assistant/full_research.py`](backend/app/service/assistant/full_research.py)，任务生命周期与恢复由 [`assistant/runtime.py`](backend/app/service/assistant/runtime.py) 管理。
 
 ## 关键设计
 
@@ -120,6 +120,7 @@ HTTP 请求负责创建任务和订阅结果，运行时通过后台异步任务
 
 | 测试入口 | 主要检查内容 |
 | --- | --- |
+| [发布接口](backend/app/scripts/test_app_routes.py) | 核心路由注册、旧入口移除、健康检查与未登录访问边界 |
 | [研究编排](backend/app/scripts/test_full_research.py) | 章节覆盖、审核修订、阶段恢复、取消时回收并发任务 |
 | [任务运行时](backend/app/scripts/test_personal_runtime.py) | 结果去重、已提交步骤恢复、取消后禁止写入、额度与超时错误 |
 | [分层记忆](backend/app/scripts/test_layered_memory.py) | 缓存回填、Token 窗口、增量摘要、用户隔离、删除与索引重试 |
@@ -166,6 +167,7 @@ python backend/app/scripts/test_research_sandbox.py
 # 在项目根目录执行；已存在配置时保留原文件
 if (!(Test-Path services.local.psd1)) { Copy-Item services.local.example.psd1 services.local.psd1 }
 if (!(Test-Path backend/.env)) { Copy-Item backend/.env.example backend/.env }
+if (!(Test-Path frontend/.env)) { Copy-Item frontend/.env.example frontend/.env }
 
 # 编辑配置并启动 Docker Desktop 后，启动本项目服务
 powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1

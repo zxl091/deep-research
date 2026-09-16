@@ -2,7 +2,7 @@
 DeepResearch V2.0 - 状态管理模块
 
 实现全局工作记忆（Global Working Memory），所有Agent共享此状态。
-使用 TypedDict 确保类型安全，与 LangGraph 完美兼容。
+使用 TypedDict 描述研究状态字段，由异步编排器推进研究阶段。
 """
 
 from typing import TypedDict, List, Dict, Any, Optional, Literal
@@ -109,10 +109,10 @@ class AgentLog:
 
 class ResearchState(TypedDict):
     """
-    LangGraph 状态定义
+    共享研究状态定义
 
     这是整个研究过程的全局状态，所有Agent都在读写这个状态。
-    使用 TypedDict 以获得类型提示和 LangGraph 兼容性。
+    使用 TypedDict 为角色间共享的数据提供类型提示。
     """
     # 基础信息
     query: str                              # 用户原始问题

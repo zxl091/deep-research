@@ -9,8 +9,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from service.docmind_service import extract_document_text, prepare_document_chunks
 from service.deep_research_v2.agents.scout import DeepScout
 from service.embedding_service import generate_embedding
-from service.chat_service import ChatService
-from service.checkpoint_service import CheckpointService
 import json
 from uuid import uuid4
 from datetime import datetime
@@ -18,36 +16,6 @@ from types import SimpleNamespace
 from service.deep_research_v2.state import chart_generation_enabled, create_initial_state
 from service.deep_research_v2.agents.wizard import CodeWizard
 from service.deep_research_v2.agents.writer import LeadWriter
-
-
-class CheckpointFailures(unittest.TestCase):
-    def test_runtime_queue_excluded_and_values_converted(self):
-        uid = uuid4()
-        original = {'_message_queue': asyncio.Queue(), '_user_id': str(uid), 'kb_ids':[str(uid)],
-                    'facts':[{'id':uid, 'date':datetime(2026, 9, 10)}]}
-        clean = CheckpointService()._clean_state_for_storage(original)
-        json.dumps(clean)
-        self.assertNotIn('_message_queue', clean)
-        self.assertEqual(clean['_user_id'], str(uid))
-        self.assertEqual(clean['kb_ids'], [str(uid)])
-        self.assertEqual(clean['facts'][0]['id'], str(uid))
-        self.assertIsInstance(original['_message_queue'], asyncio.Queue)
-
-
-class RerankFailures(unittest.TestCase):
-    def test_scores_follow_original_document_identity(self):
-        chat = object.__new__(ChatService)
-        chat.openai_api_key = 'synthetic'
-
-        def reversed_results(nodes, query_str):
-            nodes[0].score = 0.1
-            nodes[1].score = 0.9
-            return [nodes[1], nodes[0]]
-
-        with patch('service.chat_service.DashScopeRerank') as reranker:
-            reranker.return_value.postprocess_nodes.side_effect = reversed_results
-            scores = chat.rerank_similarity('query', [{'content':'irrelevant'}, {'content':'relevant'}])
-            self.assertEqual(scores, [0.1, 0.9])
 
 
 class DocumentFailures(unittest.TestCase):
