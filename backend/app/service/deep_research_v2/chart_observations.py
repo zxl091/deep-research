@@ -19,7 +19,7 @@ def period_value(year, first=1, last=12, granularity='year'):
 
 
 PERIOD_RE = re.compile(r'(?<!\d)((?:19|20)\d{2})(?:年)?\s*'
-    r'(-H[12]|上半年|下半年|前[三二一123]季度|第?[一二三四1234]季度|-Q[1-4]|'
+    r'(-H[12]|上半年|下半年|前(?:1[0-2]|[1-9])个?月|前[三二一123]季度|第?[一二三四1234]季度|-Q[1-4]|'
     r'1[—–~-](?:[1-9]|1[0-2])月|(?:1[0-2]|[1-9])月|-(?:0[1-9]|1[0-2])(?![\d-])|全年|度)?')
 
 
@@ -45,7 +45,7 @@ def periods_in(text):
                                  'year_to_date' if cumulative else 'quarter')
         elif suffix.endswith('月') or re.fullmatch(r'-\d{2}', suffix):
             months = re.findall(r'\d+', suffix)
-            cumulative = len(months) == 2
+            cumulative = len(months) == 2 or suffix.startswith('前')
             month = int(months[-1])
             value = period_value(year, 1 if cumulative else month, month, 'year_to_date' if cumulative else 'month')
         else:
@@ -59,6 +59,10 @@ def periods_in(text):
 
 def requested_period(point):
     token, basis = str(point['period']), point['period_basis']
+    from .evidence_records import special_period
+    special = special_period(point)
+    if special:
+        return special
     if re.fullmatch(r'(?:19|20)\d{2}-(?:19|20)\d{2}', token) and basis == '五年规划期':
         first, last = token.split('-')
         if int(last) - int(first) != 4:
@@ -73,6 +77,8 @@ def requested_period(point):
     if len(values) != 1 or values[0]['granularity'] == 'unknown':
         raise BindingIssue('period', '期间需要明确起止范围', 'missing_field')
     result = values[0]
+    if basis in ('累计', '年初至今') and result['granularity'] == 'month':
+        result = period_value(result['start'][:4], 1, int(result['end'][5:7]), 'year_to_date')
     declared = {'全年': 'year', '年度': 'year', '半年度': 'half_year', '上半年': 'half_year', '下半年': 'half_year',
                 '季度': 'quarter', '月度': 'month', '月': 'month', '累计': 'year_to_date', '年初至今': 'year_to_date'}
     if basis in declared and declared[basis] != result['granularity']:
@@ -154,6 +160,10 @@ def bind_table(point, source):
     if len(observed) == 1 and aggregation in ('累计', '年初至今', '累计值'):
         p = observed[0]
         observed = [period_value(int(p['start'][:4]), 1, int(p['end'][5:7]), 'year_to_date')]
+    from .evidence_records import bind_special_period
+    special = bind_special_period(point, context + '\n' + time_text, observed)
+    if special:
+        observed = [special]
     if len(observed) != 1 or observed[0]['granularity'] == 'unknown':
         raise BindingIssue('period', '表格未明确该单元格的统计期间', 'missing_field')
     if not same_period(expected, observed[0]):
@@ -193,7 +203,13 @@ def bind_text(point, source):
     # 双换行仍是段落边界，不能跨段拼接一个数据关系。
     clauses = list(re.finditer(r'(?:[^，。；;\n,]|\n(?!\n)(?<!\n\n)|(?<=\d),(?=\d))+', quote))
     candidates = []
+    from .evidence_records import enumeration_matches
+    enumeration = enumeration_matches(point, quote)
+    if enumeration:
+        candidates.append((enumeration, None))
     for clause in clauses:
+        if candidates and candidates[0][1] is None:
+            break
         sentence = re.sub(r'\s+', '', clause[0])
         # 自然语言份额常写成“甲以26%的份额...”或“甲(26%)、乙(19%)”。
         # 只扩展这一可逐字绑定的句式，指标仍必须由同段原文给出。
@@ -242,12 +258,16 @@ def bind_text(point, source):
         raise BindingIssue('entity/metric/value', '无法唯一确认该对象、指标与数值的对应关系',
                            'missing_field' if not candidates else 'ambiguous_evidence')
     clause, number = candidates[0]
-    preceding = quote[:clause.start()]
+    preceding = (adjacent + quote[:clause.start()])[-350:].split('\n\n')[-1]
     observed = periods_in(clause[0])
     if not observed:
-        observed = periods_in(adjacent + preceding)
+        observed = periods_in(preceding)
         observed = observed[-1:]
     expected = requested_period(point)
+    from .evidence_records import bind_special_period
+    special = bind_special_period(point, preceding + clause[0], observed)
+    if special:
+        observed = [special]
     if len(observed) != 1 or observed[0]['granularity'] == 'unknown':
         raise BindingIssue('period', '原文未明确该数值的完整统计期间', 'missing_field')
     if not same_period(expected, observed[0]):
@@ -259,4 +279,4 @@ def bind_text(point, source):
         'anchor': {'start': offset + clause.start(), 'end': offset + clause.end()},
         'source_sha256': hashlib.sha256(source['content'].encode()).hexdigest(),
         'unknown_fields': ['statistical_scope', 'aggregation']}
-    point['observation']['context_anchor'] = {'start': max(0, offset - len(adjacent)), 'end': offset + clause.start()}
+    point['observation']['context_anchor'] = {'start': max(0, offset + clause.start() - len(preceding)), 'end': offset + clause.start()}

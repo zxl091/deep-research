@@ -213,6 +213,7 @@ async def run_full_research(state, query, uid, sid, model, commit):
         state['charts'] = serializable(deep.get('charts', []))
         state['chart_plan'] = serializable(deep.get('chart_plan', []))
         state['chart_validation'] = serializable(deep.get('chart_validation', {}))
+        state['chart_evidence_records'] = serializable(deep.get('chart_evidence_records', {}))
         state['knowledge_graph'] = serializable(deep.get('knowledge_graph', {}))
         state['graph_validation'] = serializable(deep.get('graph_validation', {}))
         state['report_validation'] = serializable(deep.get('report_validation', {}))

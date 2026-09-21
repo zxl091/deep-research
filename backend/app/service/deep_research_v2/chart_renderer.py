@@ -7,6 +7,7 @@ def render_code(spec):
 
 
 TEMPLATE = r'''
+import textwrap
 rows, kind = spec['points'], spec['type']
 labels = list(dict.fromkeys(p['label'] for p in rows))
 series = list(dict.fromkeys(p.get('series', '') for p in rows))
@@ -94,7 +95,7 @@ elif kind=='scatter':
     for label,x,y in zip(labels,xs,ys):ax.annotate(label,(x,y),xytext=(5,5),textcoords='offset points',fontsize=9)
     ax.set_xlabel(lookup[('x',labels[0])]['metric']+' / '+lookup[('x',labels[0])]['unit'])
     ax.set_ylabel(lookup[('y',labels[0])]['metric']+' / '+lookup[('y',labels[0])]['unit'])
-ax.set_title(spec.get('title',rows[0]['metric']),fontsize=14,pad=18)
+ax.set_title('\n'.join(textwrap.wrap(spec.get('title',rows[0]['metric']), 38)),fontsize=14,pad=18)
 if kind not in ('pie','donut','heatmap','radar'):
     ax.margins(x=.15 if kind=='horizontal_bar' else .06,y=.18)
     ax.grid(axis='x' if kind=='horizontal_bar' else 'y',alpha=.18)
@@ -102,7 +103,9 @@ if kind not in ('pie','donut','heatmap','radar'):
 value_kind={'actual':'实际值','forecast':'预测值','target':'目标值'}[rows[0]['value_kind']]
 footer=rows[0]['scope']+' · '+rows[0]['period_basis']+' · '+value_kind+'；来源及原句见数据明细'
 if spec.get('display_note'):footer+='\n'+spec['display_note']
+if spec.get('coverage_note'):footer+='\n'+spec['coverage_note']
+footer='\n'.join('\n'.join(textwrap.wrap(line,70)) for line in footer.splitlines())
 fig.text(.02,.015,footer,fontsize=8,color='#52606D')
-fig.tight_layout(rect=[0,.065,1,1])
+fig.tight_layout(rect=[0,min(.28,.025+.028*len(footer.splitlines())),1,1])
 print(json.dumps({'type':kind,'points':len(rows),'series':len(series),'unit':unit},ensure_ascii=False))
 '''

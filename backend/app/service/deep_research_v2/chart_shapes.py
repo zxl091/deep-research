@@ -27,6 +27,8 @@ def validate_shape(spec, dimensions):
         spec['type'] = kind = 'bar'
         spec['type_adjustment'] = '仅有一个数据系列，使用普通柱状图，不构造额外分组。'
     if kind == 'line':
+        if any(p['observation']['period']['granularity'] in ('year_label', 'observed_date', 'effective_date') for p in rows):
+            raise ValueError('模糊年份或不同日期的报价不自动构造统计趋势；保留数据表')
         if any(not re.fullmatch(r'\d{4}(?:-(?:0[1-9]|1[0-2])|-Q[1-4]|-H[12])?', p['period']) for p in rows):
             raise ValueError('趋势期间请使用 YYYY、YYYY-MM、YYYY-Q1 或 YYYY-H1/H2 格式')
         keys = [(p.get('series', ''), p['period']) for p in rows]

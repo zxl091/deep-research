@@ -71,17 +71,17 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sandbox.call_args.args[0],code)
             compile(sandbox.call_args.args[0],'<test>','exec')
 
-    async def test_saved_proposal_reuses_pipeline_and_table_fetch_failure_is_visible(self):
+    async def test_ledger_parse_failure_and_source_fetch_failure_are_distinct(self):
         p=point(2024,89.56,'2024年节能服务282532.4589.56占比%');p['unit']='%'
         spec=dict(type='bar',points=[p,p])
         deep=dict(query='test',outline=[],charts=[],facts=[],chart_plan=[dict(id='a',title='test',desired_points=2,type='bar')],
                   chart_validation={'items':[dict(plan_id='a',attempts=[dict(proposed=[spec])])]})
-        model=type('M',(),{})();model.complete=AsyncMock(return_value={'chart':spec})
+        model=type('M',(),{})();model.complete=AsyncMock(return_value={'records':spec['points']})
         fetch=AsyncMock(side_effect=RuntimeError('denied'));execute=AsyncMock()
         await grounded_charts(deep,{'https://example.test':{'content':p['quote']}},model,execute,fetch_source=fetch,reuse_proposals=True)
         self.assertEqual(model.complete.await_count,1);execute.assert_not_awaited()
         item=deep['chart_validation']['items'][0]
-        self.assertEqual(item['status'],'table_parse_failed');self.assertEqual(item['table_fetches'][0]['status'],'failed')
+        self.assertEqual(item['status'],'parse_failed');self.assertEqual(deep['chart_validation']['fetches'][0]['status'],'source_fetch_failed')
 
 
 if __name__=='__main__':unittest.main(verbosity=2)
