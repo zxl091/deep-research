@@ -76,14 +76,16 @@ PostgreSQL JSONB 保存阶段检查点及可序列化产物，队列、连接等
 ### 3. 图表由证据驱动
 
 ```text
-来源快照 → 逐图规划 → 提取原文数据 → 必要时定向补查
-        → 绑定实体 / 指标 / 数值 / 单位 / 期间 → 数据契约校验
-        → 固定模板 → Docker 沙箱渲染 → 图片 + 数据明细 + 来源
+来源快照 → 分批提取数据台账 → 绑定实体 / 指标 / 数值 / 单位 / 时间语义
+        → 原文核验 → 按同源、同口径记录选图 → 固定模板 → Docker 沙箱
+        → 图片 + 核验数据表 + 原文定位；单点记录保留为表格
 ```
 
-每张图独立处理和保存，失败不会清空其他成功图表。数据必须绑定实际检索原文；换算记录依据，区分实际值、预测值和目标值。缺失配对或矩阵单元不补零，雷达图不生成主观评分。
+先保存核验通过的数据，再决定画什么图，避免预先设定“三家企业对比”后强凑数据。每批抽取响应有缓存，每张图独立渲染，失败保留已有成果。数据必须绑定实际检索原文；换算记录依据，区分实际值、预测值和目标值。仅标注年份的数据不会补成全年，报价的观察/生效日期不能拿网页发布日期代替。
 
-支持折线、柱状、横向条形、饼图、环形、分组柱状、百分比堆叠、雷达、散点和热力图。**类型由数据结构决定，不承诺每份报告都有图或固定图数。** 不完整市场份额可保留原百分比转为柱状图，并标注只覆盖部分主体，不补造“其他”或重新归一化。
+数据契约和绘图模板支持折线、柱状、横向条形、饼图、环形、分组柱状、百分比堆叠、雷达、散点和热力图。当前自动选图优先使用柱状/条形比较与可核验时点序列，复杂矩阵不会自动补零，雷达图不生成主观评分。**不承诺每份报告都有图或固定图数。** 不完整市场份额保留原百分比，不补造“其他”或重新归一化。
+
+台账保存来源快照摘要指纹与文本/表格定位，前端可以查看单点记录。解析失败、缺少原文、时间不明确、口径冲突、模型抽取失败与沙箱失败分别记录；只有明确缺少来源时才进行有限定向补查，避免因解析器不支持句式而反复搜索。
 
 代码运行于独立 Docker 容器：禁网、非 root、只读根目录，不挂载宿主目录和 Docker socket，不注入密钥，并限制 CPU、内存、进程数及执行时间。沙箱不可用时明确失败，不回退到宿主执行生成代码。
 
@@ -115,7 +117,7 @@ PostgreSQL JSONB 保存阶段检查点及可序列化产物，队列、连接等
 | 模型请求与角色配置 | [llm.py](backend/app/service/assistant/llm.py) · [llm_config.py](backend/app/config/llm_config.py) |
 | 专业角色及提示词 | [agents/](backend/app/service/deep_research_v2/agents) |
 | 章节组装与片段修订 | [writing_pipeline.py](backend/app/service/deep_research_v2/writing_pipeline.py) |
-| 逐图处理与数据约束 | [chart_pipeline.py](backend/app/service/deep_research_v2/chart_pipeline.py) · [chart_contract.py](backend/app/service/deep_research_v2/chart_contract.py) |
+| 图表台账、选图与数据约束 | [chart_flow.py](backend/app/service/deep_research_v2/chart_flow.py) · [chart_inventory.py](backend/app/service/deep_research_v2/chart_inventory.py) · [chart_contract.py](backend/app/service/deep_research_v2/chart_contract.py) |
 | 记忆与上下文 | [memory_context.py](backend/app/service/assistant/memory_context.py) · [memory_store.py](backend/app/service/assistant/memory_store.py) |
 | 工具与隔离 | [tools.py](backend/app/service/assistant/tools.py) · [sql_policy.py](backend/app/service/assistant/sql_policy.py) · [sandbox.py](backend/app/service/deep_research_v2/sandbox.py) |
 | 前端研究工作台 | [research/](frontend/src/pages/research) |

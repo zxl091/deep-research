@@ -19,8 +19,10 @@ export interface ResearchRun {
     outline?: { id: string; title: string; status?: string }[]
     draft_sections?: Record<string, string>
     knowledge_graph?: ResearchGraph
-    charts?: { id?: string; title?: string; chart_type?: string; image_base64?: string; echarts_option?: Record<string, unknown>; verified_data?: boolean; data_contract?: { type?: string; coverage_note?: string; display_note?: string; points: { label: string; series?: string; metric?: string; value: number; unit: string; period: string; value_kind: string; source_url: string; quote: string; context_quote?: string; period_note?: string; observation?: { schema_version: number; entity: string; metric: string; period: { start: string; end: string; granularity: string }; statistical_scope?: string | null; aggregation?: string | null; unknown_fields?: string[]; binding: string }; conversion_note?: string; qualifier?: string }[] } }[]
+    charts?: { id?: string; title?: string; chart_type?: string; image_base64?: string; echarts_option?: Record<string, unknown>; verified_data?: boolean; data_contract?: { type?: string; coverage_note?: string; display_note?: string; points: { label: string; series?: string; metric?: string; value: number; unit: string; period: string; period_basis?: string; value_kind: string; source_url: string; quote: string; context_quote?: string; period_note?: string; observation?: { schema_version: number; entity: string; metric: string; period: { start: string; end: string; granularity: string }; statistical_scope?: string | null; aggregation?: string | null; unknown_fields?: string[]; binding: string }; conversion_note?: string; qualifier?: string }[] } }[]
     chart_validation?: { items?: { plan_id: string; title?: string; status: string; points?: number; errors?: string[] }[] }
+    chart_repair?: { at?: string; note?: string; offline?: boolean }
+    chart_evidence_records?: { records?: { id: string; point: { entity: string; metric: string; scope: string; period: string; period_basis: string; value: number; unit: string; value_kind: string; source_url: string; quote: string; period_note?: string; qualifier?: string } }[]; table_only?: string[] }
     review_history?: { overall_assessment?: { verdict?: string; quality_score?: number; summary?: string }; issues?: { description?: string; severity?: string }[] }[]
   }
 }
