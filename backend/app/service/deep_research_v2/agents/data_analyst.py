@@ -319,6 +319,9 @@ class DataAnalyst(BaseAgent):
 
     async def _extract_data(self, state: ResearchState) -> Dict[str, Any]:
         """从搜索结果中提取结构化数据"""
+        if state.get('_scoped_runtime'):
+            from ..analysis_batches import extract_in_batches
+            return await extract_in_batches(self, state)
         self.logger.info("Extracting structured data...")
 
         # 收集搜索结果
@@ -359,6 +362,12 @@ class DataAnalyst(BaseAgent):
 
     async def _build_knowledge_graph(self, state: ResearchState) -> Dict[str, Any]:
         """构建知识图谱"""
+        from ..analysis_batches import digest
+        from service.assistant.llm import MODEL_CONTEXT, ModelResponseTruncated
+        key = digest([state['query'], state.get('facts', [])[:15]])
+        checkpoints = state.setdefault('analysis_checkpoints', {}).setdefault('graphs', {})
+        if key in checkpoints:
+            return checkpoints[key]
         self.logger.info("Building knowledge graph...")
 
         # 收集内容
@@ -375,12 +384,20 @@ class DataAnalyst(BaseAgent):
             content="\n".join(content_parts)
         )
 
-        response = await self.call_llm(
-            system_prompt="你是知识图谱专家，擅长从文本中提取实体和关系。请输出JSON格式。",
-            user_prompt=prompt,
-            json_mode=True,
-            temperature=0.2
-        )
+        for attempt in range(2):
+            token = MODEL_CONTEXT.set({**MODEL_CONTEXT.get(), 'step': 'analysis_graph', 'recovery_attempt': attempt})
+            try:
+                response = await self.call_llm(
+                    system_prompt="你是知识图谱专家，擅长从文本中提取实体和关系。请输出JSON格式。",
+                    user_prompt=prompt + '\n仅返回完整 JSON，最多15个节点和25条关系。不输出长解释。',
+                    json_mode=True, temperature=0.2, max_tokens=6000 if not attempt else 12000)
+                break
+            except ModelResponseTruncated:
+                if attempt:
+                    raise
+                prompt += '\n上次输出被截断，请精简属性文字，保留有依据的关键实体关系。'
+            finally:
+                MODEL_CONTEXT.reset(token)
 
         result = self.parse_json_response(response)
 
@@ -391,7 +408,7 @@ class DataAnalyst(BaseAgent):
                 node["size"] = 20 + importance * 3  # 20-50 range
 
         self.logger.info(f"Built knowledge graph with {len(result.get('nodes', []))} nodes, {len(result.get('edges', []))} edges")
-
+        checkpoints[key] = result
         return result
 
     async def _generate_charts(self, state: ResearchState, extracted_data: Dict[str, Any]) -> List[Dict[str, Any]]:

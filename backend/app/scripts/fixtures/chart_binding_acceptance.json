@@ -1,0 +1,23 @@
+[
+  {
+    "name": "医药企业研发费用（虚构验收）",
+    "html": "<h2>2023年全年研发费用（实际值）</h2><table><tr><th>公司</th><th>研发费用（亿元）</th></tr><tr><td>星河制药</td><td>12.5</td></tr><tr><td>远山生物</td><td>8.2</td></tr></table>",
+    "type": "bar", "metric": "研发费用", "unit": "亿元", "period": "2023", "period_basis": "全年", "kind": "actual",
+    "value_column": 1,
+    "expected": [{"entity":"星河制药","value":12.5,"start":"2023-01-01","end":"2023-12-31"},{"entity":"远山生物","value":8.2,"start":"2023-01-01","end":"2023-12-31"}]
+  },
+  {
+    "name": "新能源汽车月度销量（虚构验收）",
+    "html": "<h2>样本车型当月销量</h2><table><tr><th>对象</th><th>指标</th><th>期间</th><th>数值</th><th>单位</th><th>数据属性</th><th>统计方式</th></tr><tr><td>车型蓝</td><td>销量</td><td>2024年2月</td><td>801</td><td>辆</td><td>实际值</td><td>当月</td></tr><tr><td>车型绿</td><td>销量</td><td>2024年2月</td><td>1250</td><td>辆</td><td>实际值</td><td>当月</td></tr></table>",
+    "type": "horizontal_bar", "metric": "销量", "unit": "辆", "period": "2024-02", "period_basis": "月度", "kind": "actual",
+    "value_column": 3,
+    "expected": [{"entity":"车型蓝","value":801,"start":"2024-02-01","end":"2024-02-29"},{"entity":"车型绿","value":1250,"start":"2024-02-01","end":"2024-02-29"}]
+  },
+  {
+    "name": "云服务市场规模预测（虚构验收）",
+    "html": "<h2>2028年全年市场规模预测值</h2><table><tr><th>地区</th><th>市场规模（亿美元）</th></tr><tr><td>区域北</td><td>320</td></tr><tr><td>区域南</td><td>210</td></tr></table>",
+    "type": "bar", "metric": "市场规模", "unit": "亿美元", "period": "2028", "period_basis": "全年", "kind": "forecast",
+    "value_column": 1,
+    "expected": [{"entity":"区域北","value":320,"start":"2028-01-01","end":"2028-12-31"},{"entity":"区域南","value":210,"start":"2028-01-01","end":"2028-12-31"}]
+  }
+]

@@ -29,28 +29,30 @@ class ChiefArchitect(BaseAgent):
     PLANNING_PROMPT = """研究课题：{query}
 
 请为该课题生成研究大纲和研究假设，输出JSON格式如下：
+优先拆解用户明确提出的问题与维度。对比任务的主体章节必须按比较维度组织，并在每章对齐全部比较对象；不要为凑篇幅增加通用市场、政策或趋势章节。
+六个章节字段只是格式示例，按主题选择3—6章，不需要的尾部章节可省略。研究假设应当可被证据反驳，不能预设市场增长或某家公司领先。
 
 {{
-  "hypothesis_1": "关于市场/行业趋势的假设（需要验证）",
-  "hypothesis_2": "关于竞争格局或技术发展的假设（需要验证）",
-  "hypothesis_3": "关于政策或外部因素影响的假设（需要验证）",
-  "sec_1_title": "市场概况",
-  "sec_1_desc": "描述市场规模、增速",
+  "hypothesis_1": "直接关联用户问题的待验证假设",
+  "hypothesis_2": "关于差异原因的待验证假设",
+  "hypothesis_3": "关于适用条件或风险的待验证假设",
+  "sec_1_title": "用户的第一个核心问题或比较维度",
+  "sec_1_desc": "明确对象、范围、证据需求与需要解释的差异",
   "sec_1_query": "搜索关键词",
-  "sec_2_title": "竞争格局",
-  "sec_2_desc": "描述主要企业",
+  "sec_2_title": "第二个核心问题或比较维度",
+  "sec_2_desc": "本章独有的问题，避免重复第一章",
   "sec_2_query": "搜索关键词",
-  "sec_3_title": "技术趋势",
-  "sec_3_desc": "描述核心技术",
+  "sec_3_title": "第三个核心问题或比较维度",
+  "sec_3_desc": "按同一维度展开所有相关对象",
   "sec_3_query": "搜索关键词",
-  "sec_4_title": "政策环境",
-  "sec_4_desc": "描述相关政策",
+  "sec_4_title": "第四个核心问题（如需要）",
+  "sec_4_desc": "仅展开用户需求涉及的问题",
   "sec_4_query": "搜索关键词",
-  "sec_5_title": "挑战机遇",
-  "sec_5_desc": "描述挑战和机会",
+  "sec_5_title": "证据支持的综合判断（如需要）",
+  "sec_5_desc": "解释差异形成原因与适用条件",
   "sec_5_query": "搜索关键词",
-  "sec_6_title": "未来展望",
-  "sec_6_desc": "描述发展趋势",
+  "sec_6_title": "影响结论的重要局限（如需要）",
+  "sec_6_desc": "只讨论影响用户决策的实质问题",
   "sec_6_query": "搜索关键词",
   "questions": "核心问题1;核心问题2;核心问题3"
 }}
@@ -233,7 +235,7 @@ class ChiefArchitect(BaseAgent):
     ...更多章节(共5-8个)...
 ], "research_questions": ["问题1", "问题2", "问题3"], "key_entities": []}}
 
-要求：outline必须包含5-8个章节，覆盖市场概况、企业竞争、技术趋势、政策环境、未来展望等方面。"""
+要求：outline包含3-6个章节，按用户核心问题与比较维度组织，不套市场、政策、趋势模板；每章描述应说明要回答的问题与需要检索的证据。"""
 
         if not result:
             state["errors"].append("Failed to generate research plan after retries")

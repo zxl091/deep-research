@@ -12,7 +12,7 @@ from config.llm_config import LLMConfig, reload_config
 class ModelConfigTests(unittest.TestCase):
     def test_one_setting_controls_every_role(self):
         for model in ('qwen3.7-flash', 'fixture-next-model'):
-            with self.subTest(model=model), patch.dict(os.environ, {'OPENAI_MODEL': model}):
+            with self.subTest(model=model), patch.dict(os.environ, {'OPENAI_MODEL': model, 'RESEARCH_SEARCH_MODEL': ''}):
                 config = reload_config()
                 self.assertEqual(config.default_model, model)
                 for role in ('architect', 'scout', 'data_analyst', 'wizard', 'critic', 'writer', 'unknown'):
@@ -20,7 +20,7 @@ class ModelConfigTests(unittest.TestCase):
 
     def test_blank_setting_keeps_working_default(self):
         with patch.dict(os.environ, {'OPENAI_MODEL': '  '}):
-            self.assertEqual(LLMConfig().default_model, 'qwen3.7-flash')
+            self.assertEqual(LLMConfig().default_model, 'qwen3.7-plus')
 
     def test_existing_provider_endpoint_and_explicit_override(self):
         with patch.dict(os.environ, {'DASHSCOPE_BASE_URL': 'https://provider.example/v1'}, clear=True):

@@ -21,7 +21,12 @@ from typing import Optional, Dict, Any
 
 def configured_model() -> str:
     """研究、问答、记忆和 Text2SQL 共用 backend/.env 中的模型 ID。"""
-    return os.getenv("OPENAI_MODEL", "").strip() or "qwen3.7-flash"
+    return os.getenv("OPENAI_MODEL", "").strip() or "qwen3.7-plus"
+
+
+def configured_search_model() -> str:
+    """搜索角色可单独覆盖；未配置时继续跟随主模型。"""
+    return os.getenv("RESEARCH_SEARCH_MODEL", "").strip() or configured_model()
 
 
 @dataclass
@@ -51,7 +56,7 @@ class AgentsConfig:
 
     # 侦察员 - 深度搜索
     scout: AgentModelConfig = field(default_factory=lambda: AgentModelConfig(
-        model=configured_model(),
+        model=configured_search_model(),
         temperature=0.5,
         max_tokens=4000
     ))

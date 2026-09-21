@@ -13,11 +13,16 @@ import asyncio
 import hashlib
 import requests
 import httpx
+from openai import APIConnectionError, APITimeoutError
+from service.assistant.llm import MODEL_CONTEXT, ModelCallTimedOut, ModelResponseError, ModelResponseTruncated
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from .base import BaseAgent
+from ..evidence_reuse import existing_fact, unique_sources, new_sources, mark_extracted
 from ..state import ResearchState, ResearchPhase
+
+RECOVERABLE = (ModelCallTimedOut, ModelResponseError, APIConnectionError, APITimeoutError)
 
 # 网页文本提取库（可选依赖）
 try:
@@ -246,18 +251,39 @@ URL: {url}
             "content": f"开始{'、'.join(search_mode_desc)}，共 {len(pending_sections)} 个章节待研究..."
         })
 
-        # 并行研究多个章节
-        # 三个是并发度，不是整个报告允许研究的章节数量。
-        for start in range(0, len(pending_sections), 3):
-            tasks = [asyncio.create_task(self._research_section(state, section))
-                     for section in pending_sections[start:start + 3]]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
+        # 固定数量的 worker：一个章节结束后立即取下一章，不等待整批。
+        pending = asyncio.Queue()
+        for section in pending_sections:
+            pending.put_nowait(section)
+        failures = []
+
+        async def worker():
+            while not pending.empty():
+                section = pending.get_nowait()
+                token = MODEL_CONTEXT.set({'role': 'scout', 'section_id': section.get('id'),
+                                           'section': section.get('title', '')})
+                try:
+                    await self._research_section(state, section)
+                    section.pop('research_error', None)
+                except RECOVERABLE as exc:
+                    section['status'] = 'researching'
+                    section['research_error'] = type(exc).__name__
+                    failures.append(section.get('title', section.get('id', '未知章节')))
+                    self.add_message(state, 'warning', {'title': f"{failures[-1]}：当前步骤未完成，其他章节继续；已保存可恢复进度。"})
+                finally:
+                    MODEL_CONTEXT.reset(token)
+                    pending.task_done()
+
+        tasks = [asyncio.create_task(worker()) for _ in range(min(3, len(pending_sections)))]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if failures:
+            raise ModelResponseError('以下章节基础分析未完成，其他章节进度已保存，可继续：' + '、'.join(failures))
 
         # 发送 research_step 完成事件
         self.add_message(state, "research_step", {
@@ -333,7 +359,7 @@ URL: {url}
                         content = fact.get("content", "")
                         source_url = fact.get("source_url", "")
 
-                        if not self._is_duplicate_fact(content, source_url):
+                        if not existing_fact(state, content, source_url):
                             fact_entry = {
                                 "id": f"fact_{uuid.uuid4().hex[:8]}",
                                 "content": content,
@@ -386,7 +412,7 @@ URL: {url}
             return self._local_evidence(results)
         results_text = []
         for r in results[:8]:
-            results_text.append(f"标题: {r.get('title', 'N/A')}\nURL: {r.get('url', '')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:300]}")
+            results_text.append(f"标题: {r.get('title', 'N/A')}\nURL: {r.get('url', '')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:1800]}")
 
         prompt = f"""你是一位专业的研究分析师，正在补充搜索以解决审核发现的信息缺失问题。
 
@@ -421,11 +447,12 @@ URL: {url}
 }}
 ```"""
 
-        response = await self.call_llm(
+        response = await self._call_extraction(
             system_prompt="你是专业的信息提取专家，擅长从搜索结果中提取结构化信息。",
             user_prompt=prompt,
             json_mode=True,
-            temperature=0.2
+            temperature=0.2,
+            max_tokens=3000
         )
 
         return self.parse_json_response(response)
@@ -451,6 +478,8 @@ URL: {url}
 
     async def _research_section(self, state: ResearchState, section: Dict) -> None:
         """研究单个章节"""
+        section['status'] = 'researching'
+        checkpoint = section.setdefault('research_checkpoint', {})
         section_id = section["id"]
         section_title = section["title"]
         search_queries = section.get("search_queries", [section_title])
@@ -470,99 +499,108 @@ URL: {url}
             "search_local": search_local
         })
 
-        # 逐个执行搜索，每完成一个就发送事件（提升用户体验）
-        all_results = []
-        for i, query in enumerate(search_queries):
-            # 网络搜索
-            if search_web:
-                results = await self._execute_search(query)
-                all_results.extend(results)
+        if 'analysis' not in checkpoint:
+            # 逐个执行搜索，每完成一个就发送事件（提升用户体验）
+            all_results = []
+            for i, query in enumerate(search_queries):
+                # 网络搜索
+                if search_web:
+                    results = await self._execute_search(query)
+                    all_results.extend(results)
 
-                # 搜索完成后立即发送原始结果（让用户看到进度）
-                if results:
-                    self.add_message(state, "search_progress", {
-                        "agent": self.name,
-                        "query": query,
-                        "results_count": len(results),
-                        "total_so_far": len(all_results),
-                        "section": section_title,
-                        "progress": f"{i + 1}/{len(search_queries)}",
-                        "search_type": "web"
-                    })
+                    # 搜索完成后立即发送原始结果（让用户看到进度）
+                    if results:
+                        self.add_message(state, "search_progress", {
+                            "agent": self.name,
+                            "query": query,
+                            "results_count": len(results),
+                            "total_so_far": len(all_results),
+                            "section": section_title,
+                            "progress": f"{i + 1}/{len(search_queries)}",
+                            "search_type": "web"
+                        })
 
-                    # 立即发送搜索结果供前端展示
-                    search_results_for_ui = [
-                        {
-                            "id": f"sr_{uuid.uuid4().hex[:6]}",
-                            "title": r.get("title", "")[:80],
-                            "source": r.get("site_name", "未知来源"),
-                            "url": r.get("url", ""),
-                            "snippet": r.get("summary", "") or r.get("snippet", ""),
-                            "date": r.get("date", ""),
-                            "isLocal": False
-                        }
-                        for r in results[:5]  # 每次最多显示5条
-                    ]
-                    self.add_message(state, "search_results", {
-                        "results": search_results_for_ui,
-                        "isIncremental": True,
-                        "searchType": "web"
-                    })
+                        # 立即发送搜索结果供前端展示
+                        search_results_for_ui = [
+                            {
+                                "id": f"sr_{uuid.uuid4().hex[:6]}",
+                                "title": r.get("title", "")[:80],
+                                "source": r.get("site_name", "未知来源"),
+                                "url": r.get("url", ""),
+                                "snippet": r.get("summary", "") or r.get("snippet", ""),
+                                "date": r.get("date", ""),
+                                "isLocal": False
+                            }
+                            for r in results[:5]  # 每次最多显示5条
+                        ]
+                        self.add_message(state, "search_results", {
+                            "results": search_results_for_ui,
+                            "isIncremental": True,
+                            "searchType": "web"
+                        })
 
-            # 本地知识库搜索
-            if search_local:
-                local_results = await self._execute_local_search(query, state=state)
-                all_results.extend(local_results)
+                # 本地知识库搜索
+                if search_local:
+                    local_results = await self._execute_local_search(query, state=state)
+                    all_results.extend(local_results)
 
-                if local_results:
-                    self.add_message(state, "search_progress", {
-                        "agent": self.name,
-                        "query": query,
-                        "results_count": len(local_results),
-                        "total_so_far": len(all_results),
-                        "section": section_title,
-                        "progress": f"{i + 1}/{len(search_queries)}",
-                        "search_type": "local"
-                    })
+                    if local_results:
+                        self.add_message(state, "search_progress", {
+                            "agent": self.name,
+                            "query": query,
+                            "results_count": len(local_results),
+                            "total_so_far": len(all_results),
+                            "section": section_title,
+                            "progress": f"{i + 1}/{len(search_queries)}",
+                            "search_type": "local"
+                        })
 
-                    # 发送本地搜索结果
-                    local_results_for_ui = [
-                        {
-                            "id": f"lr_{uuid.uuid4().hex[:6]}",
-                            "title": r.get("title", "")[:80],
-                            "source": "本地知识库",
-                            "url": r.get("url", ""),
-                            "snippet": r.get("summary", "") or r.get("snippet", ""),
-                            "date": "",
-                            "isLocal": True,
-                            "score": r.get("score", 0)
-                        }
-                        for r in local_results[:5]
-                    ]
-                    self.add_message(state, "search_results", {
-                        "results": local_results_for_ui,
-                        "isIncremental": True,
-                        "searchType": "local"
-                    })
+                        # 发送本地搜索结果
+                        local_results_for_ui = [
+                            {
+                                "id": f"lr_{uuid.uuid4().hex[:6]}",
+                                "title": r.get("title", "")[:80],
+                                "source": "本地知识库",
+                                "url": r.get("url", ""),
+                                "snippet": r.get("summary", "") or r.get("snippet", ""),
+                                "date": "",
+                                "isLocal": True,
+                                "score": r.get("score", 0)
+                            }
+                            for r in local_results[:5]
+                        ]
+                        self.add_message(state, "search_results", {
+                            "results": local_results_for_ui,
+                            "isIncremental": True,
+                            "searchType": "local"
+                        })
 
-        if not all_results:
-            self.logger.warning(f"No search results for section: {section_title}")
-            return
+            all_results = unique_sources(all_results)
+            if not all_results:
+                self.logger.warning(f"No search results for section: {section_title}")
+                raise ModelResponseError("本章节未取得检索资料，已保留其他章节进度")
 
-        self.add_message(state, "thought", {
-            "agent": self.name,
-            "content": f"搜索完成，获得 {len(all_results)} 条结果，正在分析提取关键信息..."
-        })
+            self.add_message(state, "thought", {
+                "agent": self.name,
+                "content": f"搜索完成，获得 {len(all_results)} 条结果，正在分析提取关键信息..."
+            })
 
-        # 分析搜索结果（传入假设以便验证）
-        analysis = await self._analyze_search_results(
-            state["query"],
-            section,
-            all_results,
-            hypotheses=state.get("hypotheses", [])
-        )
+            # 分析搜索结果（传入假设以便验证）
+            analysis = await self._analyze_search_results(
+                state["query"],
+                section,
+                all_results,
+                hypotheses=state.get("hypotheses", [])
+            )
 
-        if analysis:
+            if not isinstance(analysis, dict) or not isinstance(analysis.get('extracted_facts'), list):
+                raise ModelResponseError('章节事实抽取结构无效，可重试当前步骤')
+            checkpoint.update(analysis=analysis, results=all_results)
+        analysis, all_results = checkpoint['analysis'], checkpoint['results']
+        if analysis.get('extracted_facts'):
+            mark_extracted(state, section_id, all_results[:15])
+
+        if not checkpoint.get("applied"):
             # 提取事实（带去重）
             added_facts = 0
             duplicate_facts = 0
@@ -571,7 +609,7 @@ URL: {url}
                 source_url = fact.get("source_url", "")
 
                 # 去重检查
-                if self._is_duplicate_fact(content, source_url):
+                if existing_fact(state, content, source_url, section_id):
                     duplicate_facts += 1
                     continue
 
@@ -681,34 +719,41 @@ URL: {url}
                 "data_points": extracted_data_points[:10]
             })
 
-            # 递归搜索：信源追溯查询（优先级最高）
-            source_tracing = analysis.get("source_tracing_queries", [])
-            if source_tracing and state["iteration"] < state["max_iterations"]:
-                self.add_message(state, "thought", {
-                    "agent": self.name,
-                    "content": f"追溯原始数据源: {', '.join(source_tracing[:2])}"
-                })
-                # 执行信源追溯搜索
-                await self._execute_deep_search(
-                    state, section_id, source_tracing[:2],
-                    search_type="source_tracing",
-                    hypotheses=state.get("hypotheses", [])
-                )
+            checkpoint['applied'] = True
+            self.add_message(state, 'research_step', {'title': section_title + '：基础分析已保存'})
 
-            # 递归搜索：追踪发现的新线索
-            follow_up = analysis.get("follow_up_queries", [])
-            if follow_up and state["iteration"] < state["max_iterations"]:
-                self.add_message(state, "thought", {
-                    "agent": self.name,
-                    "content": f"追踪发现的线索: {', '.join(follow_up[:2])}"
-                })
-                # 执行线索追踪搜索
-                await self._execute_deep_search(
-                    state, section_id, follow_up[:2],
-                    search_type="follow_up",
-                    hypotheses=state.get("hypotheses", [])
-                )
+        # 递归搜索：信源追溯查询（优先级最高）
+        source_tracing = analysis.get("source_tracing_queries", [])
+        if source_tracing and state["iteration"] < state["max_iterations"]:
+            self.add_message(state, "thought", {
+                "agent": self.name,
+                "content": f"追溯原始数据源: {', '.join(source_tracing[:2])}"
+            })
+            # 执行信源追溯搜索
+            await self._execute_deep_search(
+                state, section_id, source_tracing[:2],
+                search_type="source_tracing",
+                hypotheses=state.get("hypotheses", [])
+            )
 
+        # 递归搜索：追踪发现的新线索
+        follow_up = analysis.get("follow_up_queries", [])
+        if follow_up and state["iteration"] < state["max_iterations"]:
+            self.add_message(state, "thought", {
+                "agent": self.name,
+                "content": f"追踪发现的线索: {', '.join(follow_up[:2])}"
+            })
+            # 执行线索追踪搜索
+            await self._execute_deep_search(
+                state, section_id, follow_up[:2],
+                search_type="follow_up",
+                hypotheses=state.get("hypotheses", [])
+            )
+
+        if not any(f.get('source_url') and section_id in f.get('related_sections', []) for f in state['facts']):
+            checkpoint.pop('analysis', None)
+            checkpoint.pop('applied', None)
+            raise ModelResponseError('本章节未提取到带来源的事实，不能标记为完成')
         # 更新章节状态
         section["status"] = "researched"
 
@@ -738,11 +783,6 @@ URL: {url}
             self.logger.info(f"Reached max recursion depth ({max_depth})")
             return
 
-        type_labels = {
-            "source_tracing": "信源追溯",
-            "follow_up": "线索追踪"
-        }
-
         self.add_message(state, "action", {
             "agent": self.name,
             "tool": f"deep_search_{search_type}",
@@ -751,11 +791,26 @@ URL: {url}
         })
 
         for query in queries:
+            key = hashlib.sha256(f'{section_id}|{search_type}|{depth}|{query}'.encode()).hexdigest()
+            token = MODEL_CONTEXT.set({**MODEL_CONTEXT.get(), 'step': search_type, 'depth': depth})
+            try:
+                await self._deep_search_query(state, section_id, query, search_type, hypotheses, depth, max_depth, key)
+                state.setdefault('research_gaps', {}).pop(key, None)
+            except RECOVERABLE as exc:
+                state.setdefault('research_gaps', {})[key] = f'补充追溯未完成：{query}（{type(exc).__name__}）；相关结论尚未核实。'
+                self.add_message(state, 'warning', {'title': state['research_gaps'][key]})
+            finally:
+                MODEL_CONTEXT.reset(token)
+
+    async def _deep_search_query(self, state, section_id, query, search_type, hypotheses, depth, max_depth, key):
+        type_labels = {'source_tracing': '信源追溯', 'follow_up': '线索追踪'}
+        checkpoint = state.setdefault('search_checkpoints', {}).setdefault(key, {})
+        if 'analysis' not in checkpoint:
             # 执行搜索
             results = await self._search_for_state(query, state, count=6)
 
             if not results:
-                continue
+                raise ModelResponseError("补充搜索未返回资料")
 
             # 立即发送搜索结果供前端展示（增量）
             search_results_for_ui = [
@@ -776,6 +831,12 @@ URL: {url}
                 "depth": depth
             })
 
+            fresh = new_sources(state, section_id, results)
+            if not fresh:
+                checkpoint.update(analysis={'extracted_facts': []}, applied=True, reused=True)
+                self.add_message(state, 'research_step', {'title': '追溯命中已抽取资料，复用事实并停止本分支'})
+                return
+            results = fresh
             # 分析结果
             analysis = await self._analyze_deep_search_results(
                 state["query"],
@@ -786,15 +847,21 @@ URL: {url}
             )
 
             if not analysis:
-                continue
+                raise ModelResponseError("补充分析没有有效结果")
 
+            if not isinstance(analysis, dict) or not isinstance(analysis.get('extracted_facts'), list):
+                raise ModelResponseError('追溯事实抽取结构无效')
+            checkpoint['analysis'] = analysis
+            mark_extracted(state, section_id, results[:6])
+        analysis = checkpoint['analysis']
+        if not checkpoint.get('applied'):
             # 提取并添加事实
             added_facts = 0
             for fact in analysis.get("extracted_facts", []):
                 content = fact.get("content", "")
                 source_url = fact.get("source_url", "")
 
-                if not self._is_duplicate_fact(content, source_url):
+                if not existing_fact(state, content, source_url, section_id):
                     fact_entry = {
                         "id": f"fact_{uuid.uuid4().hex[:8]}",
                         "content": content,
@@ -835,19 +902,39 @@ URL: {url}
 
             self.logger.info(f"Deep search ({search_type}, depth={depth}): +{added_facts} facts for query '{query[:30]}...'")
 
-            # 如果发现更多需要追溯的线索，继续递归（但不超过max_depth）
-            if depth < max_depth:
-                further_tracing = analysis.get("further_tracing_queries", [])
-                if further_tracing:
-                    self.add_message(state, "thought", {
-                        "agent": self.name,
-                        "content": f"发现更深层线索 (深度{depth+1}): {', '.join(further_tracing[:2])}"
-                    })
-                    await self._execute_deep_search(
-                        state, section_id, further_tracing[:2],
-                        search_type, hypotheses,
-                        depth=depth + 1, max_depth=max_depth
-                    )
+            checkpoint['applied'] = True
+            self.add_message(state, 'research_step', {'title': '追溯分析已保存：' + query[:80]})
+
+        # 如果发现更多需要追溯的线索，继续递归（但不超过max_depth）
+        if depth < max_depth:
+            further_tracing = analysis.get("further_tracing_queries", [])
+            if further_tracing:
+                self.add_message(state, "thought", {
+                    "agent": self.name,
+                    "content": f"发现更深层线索 (深度{depth+1}): {', '.join(further_tracing[:2])}"
+                })
+                await self._execute_deep_search(
+                    state, section_id, further_tracing[:2],
+                    search_type, hypotheses,
+                    depth=depth + 1, max_depth=max_depth
+                )
+
+    async def _call_extraction(self, **kwargs):
+        kwargs['user_prompt'] += ('\n输出要求：仅输出所需 JSON，不复述输入；事实逐条简洁陈述，保留来源 URL、数值与单位。'
+                                  '合并重复内容，不为凑字段编造事实；后续查询每类最多两条。'
+                                  '仅为影响结论的证据缺口、关键口径冲突或缺少原始来源生成后续查询；'
+                                  '已有足够直接证据时后续查询返回空数组，不机械扩展同义查询。')
+        token = MODEL_CONTEXT.set({**MODEL_CONTEXT.get(), 'step': MODEL_CONTEXT.get().get('step', 'fact_extraction'),
+                                   'response_schema': 'research_extraction'})
+        try:
+            try:
+                return await self.call_llm(**kwargs)
+            except ModelResponseTruncated:
+                kwargs['max_tokens'] = min(8000, kwargs['max_tokens'] * 2)
+                kwargs['user_prompt'] += '\n上次输出被截断：压缩重复说明，保留重要事实及对应来源，重新输出完整 JSON。'
+                return await self.call_llm(**kwargs)
+        finally:
+            MODEL_CONTEXT.reset(token)
 
     async def _analyze_deep_search_results(
         self,
@@ -862,7 +949,7 @@ URL: {url}
             return self._local_evidence(results)
         results_text = []
         for r in results[:6]:
-            results_text.append(f"标题: {r.get('title', 'N/A')}\nURL: {r.get('url', '')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:300]}")
+            results_text.append(f"标题: {r.get('title', 'N/A')}\nURL: {r.get('url', '')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:1800]}")
 
         hypotheses_text = ""
         if hypotheses:
@@ -911,11 +998,12 @@ URL: {url}
 }}
 ```"""
 
-        response = await self.call_llm(
+        response = await self._call_extraction(
             system_prompt="你是专业的信息验证专家，擅长从搜索结果中提取权威信息并追溯原始来源。",
             user_prompt=prompt,
             json_mode=True,
-            temperature=0.2
+            temperature=0.2,
+            max_tokens=3000
         )
 
         return self.parse_json_response(response)
@@ -1057,7 +1145,7 @@ URL: {url}
 URL: {r.get('url', '')}
 来源: {r.get('site_name', 'N/A')}
 日期: {r.get('date', 'N/A')}
-摘要: {r.get('summary', '')[:300]}
+摘要: {r.get('summary', '')[:1800]}
 """)
 
         # 格式化假设
@@ -1077,11 +1165,12 @@ URL: {r.get('url', '')}
             search_results="\n".join(formatted_results)
         )
 
-        response = await self.call_llm(
+        response = await self._call_extraction(
             system_prompt="你是专业的研究分析师，擅长从搜索结果中提取结构化信息、验证假设并评估来源质量。",
             user_prompt=prompt,
             json_mode=True,
-            temperature=0.2
+            temperature=0.2,
+            max_tokens=4000
         )
 
         return self.parse_json_response(response)
@@ -1222,31 +1311,15 @@ URL: {r.get('url', '')}
         return text[:max_length]
 
     def _compute_fact_fingerprint(self, content: str) -> str:
-        """计算事实的语义指纹用于去重"""
-        # 简化版：使用内容hash
-        # TODO: 集成向量嵌入进行语义相似度比较
-        import re
-        # 提取数字和关键词作为指纹
-        numbers = re.findall(r'\d+\.?\d*', content)
-        keywords = re.findall(r'[\u4e00-\u9fa5]{2,4}', content)[:5]
-        fingerprint = f"{','.join(numbers[:3])}|{','.join(keywords)}"
-        return hashlib.md5(fingerprint.encode()).hexdigest()[:16]
+        from ..evidence_reuse import normalized
+        return hashlib.sha256(normalized(content).encode()).hexdigest()
 
     def _is_duplicate_fact(self, content: str, source_url: str) -> bool:
-        """检查事实是否重复"""
-        fingerprint = self._compute_fact_fingerprint(content)
-
-        # 检查指纹是否已存在
-        if fingerprint in self.fact_fingerprints:
-            existing_url = self.fact_fingerprints[fingerprint]
-            # 如果是同一个来源，不算重复（可能是更详细的版本）
-            if existing_url == source_url:
-                return False
-            self.logger.debug(f"Duplicate fact detected: {content[:50]}...")
+        # Different sources remain independent evidence, even with equal wording.
+        key = (source_url, self._compute_fact_fingerprint(content))
+        if key in self.fact_fingerprints:
             return True
-
-        # 保存指纹
-        self.fact_fingerprints[fingerprint] = source_url
+        self.fact_fingerprints[key] = source_url
         return False
 
     def _update_knowledge_graph(self, state: ResearchState, entities: List[Dict]) -> None:

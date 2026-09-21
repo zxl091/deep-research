@@ -128,6 +128,9 @@ async def resume(run_id: UUID, user=Depends(get_current_user_required), db: Sess
     for action in state['actions']:
         if action['status'] == 'running':
             action['status'] = 'interrupted'
+    for attempt in state.get('usage', {}).get('model_attempts', []):
+        if attempt.get('status') == 'running':
+            attempt['status'] = 'interrupted'
     state.pop('error', None)
     run.state, run.status = state, 'queued'
     db.commit()

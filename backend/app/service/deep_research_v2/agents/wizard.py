@@ -11,6 +11,7 @@ DeepResearch V2.0 - 数据极客 Agent (CodeWizard)
 import uuid
 import asyncio
 import json
+import hashlib
 import base64
 import io
 import sys
@@ -371,7 +372,19 @@ df = df.dropna()
 
         # 执行数据分析
         self.logger.info(f"[CodeWizard] 开始执行 _analyze_data...")
-        await self._analyze_data(state)
+        signature = hashlib.sha256(json.dumps([state['query'], state['data_points']],
+            sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+        checkpoint = state.get('wizard_analysis_checkpoint', {})
+        if state.get('_scoped_runtime') and checkpoint.get('signature') == signature:
+            self.add_message(state, 'research_step', {'title': '复用已完成的沙箱分析，继续图表核验'})
+        else:
+            before = len(state.get('code_executions', []))
+            await self._analyze_data(state)
+            executions = state.get('code_executions', [])
+            if (state.get('_scoped_runtime') and len(executions) > before
+                    and not executions[-1].get('error')):
+                state['wizard_analysis_checkpoint'] = {'signature': signature, 'execution_id': executions[-1]['id']}
+                self.add_message(state, 'research_step', {'title': '沙箱分析子步骤已保存'})
         self.logger.info(f"[CodeWizard] _analyze_data 完成，当前 charts 数量: {len(state['charts'])}")
 
         # 生成图表
@@ -1034,8 +1047,12 @@ df = df.dropna()
         raw_code = code  # 保存原始代码用于调试
         self._save_debug_log("exec_1_input_raw", repr(raw_code))
 
-        # 清理代码
-        code = self._clean_code(code)
+        # 合法 Python（包括固定模板内的 JSON 转义）必须保持原样。
+        # 仅对不能编译的模型文本尝试旧格式兼容，避免破坏字符串里的 \\n。
+        try:
+            compile(code, '<research>', 'exec')
+        except SyntaxError:
+            code = self._clean_code(code)
         self._save_debug_log("exec_2_after_clean", code)
         self.logger.info(f"[CodeWizard] 清理后代码行数: {code.count(chr(10)) + 1}, 长度: {len(code)}")
 
@@ -1051,6 +1068,7 @@ df = df.dropna()
             self._save_debug_log("exec_3_syntax", f"FAILED: {e}\n\n错误行: {e.lineno}\n\n代码:\n{code}")
             # 保存调试信息
             self._save_debug_info(raw_code, code, e)
+            return {'success': False, 'error': f'SyntaxError: {e}', 'output': '', 'charts': []}
 
         # 安全检查
         if not self._is_code_safe(code):
