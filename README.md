@@ -1,199 +1,192 @@
 # DeepResearch
 
-### 面向个人资料与业务数据的多 Agent 研究系统
+**面向行业资料与业务数据的智能调研工作台**
 
-基于 FastAPI 与 React 构建的研究型 Agent 应用，将任务规划、多源检索、数据分析、沙箱绘图、报告生成和审核修订组织为可追踪、可恢复的执行流程。支持知识库检索、只读 Text2SQL，以及跨会话的分层记忆。
+输入研究问题，选择联网搜索、个人知识库或业务数据，获得包含章节、对照表、图表、关系图谱与来源引用的研究结果。系统保留执行过程、已完成章节及审核意见，支持历史研究复用和检查点恢复。
 
-项目重点在于 **Agent 的执行控制与工程可靠性**：如何限制工具权限、管理研究状态、处理长任务中断、维护证据来源，以及在上下文预算内复用历史研究。
+项目重点是研究型 Agent 的工程实现：**组织长任务、约束证据与工具、控制上下文，在模型调用失败后保住已有成果。**
 
-**技术栈：** Python / FastAPI / asyncio / React / TypeScript / PostgreSQL / Redis / Milvus / SSE / Docker
+`Python` · `FastAPI` · `asyncio` · `React / TypeScript` · `PostgreSQL` · `Redis` · `Milvus` · `SSE` · `Docker`
 
-[系统架构](#系统架构) · [关键设计](#关键设计) · [验证与测试](#验证与测试) · [界面展示](#界面展示) · [本地运行](#本地运行)
+[工作流程](#工作流程) · [核心设计](#核心设计) · [代码导航](#代码导航) · [运行与配置](#运行与配置) · [验证与边界](#验证与边界)
 
-## 项目背景
+![研究工作台：左侧对话，右侧报告与成果](assets/readme/research-report.png)
 
-面向研报分析、专题调研和业务数据分析，系统需要同时处理非结构化文档、公开搜索结果与结构化数据。单次模型调用难以覆盖持续检索、证据核对、长报告写作和失败恢复等需求。
+> 展示图使用真实前端组件与人工编写的示例数据，不代表模型评测结果。[截图说明](assets/readme/README.md)
 
-本项目将研究过程拆分为具有明确输入、输出和状态的阶段，通过统一运行时管理 Agent 与工具；将研究事实、会话背景和运行时对象分别处理，避免仅依赖不断增长的对话记录驱动整个流程。
+## 使用场景
 
-| 能力 | 实现范围 |
-| --- | --- |
-| 深度研究 | 规划大纲、按章节检索、分析与绘图、分章写作、审核及补查 / 修订 |
-| 知识库 | 文档上传、DocMind 解析、向量入库、限定用户及资料范围的检索 |
-| 会话与记忆 | 完整历史持久化、近期上下文窗口、结构化摘要、跨会话语义召回 |
-| 数据库探索 | 业务表浏览、自然语言生成受限只读 SQL、查询结果作为研究证据 |
+用户在左侧提出问题、追问和观察进度，在右侧集中阅读报告、表格、图表、关系图谱及证据，避免在长对话中寻找研究结果。
 
-## 系统架构
+| 场景 | 输入示例 | 主要产物 |
+| --- | --- | --- |
+| 企业与产品比较 | 比较三家云厂商的企业大模型业务，覆盖产品、部署、客户和商业化路径 | 分章分析、核心对照表、带引用的差异与适用条件 |
+| 行业专题调研 | 梳理某行业的产业链、竞争格局与风险，区分事实和预测 | 报告、实体关系图谱、证据充分时生成的数据图表 |
+| 个人资料研究 | 从上传研报中整理公司项目、业务变化和风险依据 | 限定资料范围的回答、引用与待核查事项 |
+| 业务数据探索 | 查询业务表中的行业规模或企业指标，解释差异 | 受限只读 SQL、结果表与分析 |
+| 历史研究复用 | 回顾之前研究关注的项目和风险，继续追问 | 完整会话、当前摘要与相关历史摘要 |
+
+知识库提供文档上传、DocMind 解析和向量检索；会话管理保留完整问答；记忆管理支持查看、删除摘要及处理索引状态。数据库探索目前面向内置业务表，并非通用数据库客户端。
+
+## 工作流程
 
 ```mermaid
 flowchart TB
-    UI[React 研究工作台] --> API[FastAPI：鉴权 / 会话 / 研究任务]
-    API --> RT[Runtime：任务生命周期 / 检查点 / 事件]
-    RT --> INTENT[意图识别与模式路由]
-    INTENT --> LIGHT[普通问答 / 历史回顾 / Text2SQL]
-    INTENT --> FULL[完整研究状态机]
-    FULL --> PLAN[Architect：规划]
-    PLAN --> SEARCH[Scout：检索]
-    SEARCH --> ANALYZE[Analyst：分析]
-    ANALYZE --> CHART[Wizard：计算与绘图]
-    CHART --> WRITE[Writer：写作]
-    WRITE --> REVIEW[Critic：审核]
-    REVIEW -->|补充证据| SEARCH
-    REVIEW -->|修订内容| WRITE
-    REVIEW -->|通过或达到迭代上限| RESULT[报告 / 部分结果与缺口]
-    LIGHT --> RESULT
-    RT --> PG[(PostgreSQL：状态 / 事件 / 历史 / 摘要)]
-    PG --> SSE[SSE：按序号补读事件]
-    SSE --> UI
-    RT --> CTX[Context：近期对话 + 当前摘要 + 相关记忆]
-    CTX --> REDIS[(Redis：近期窗口)]
-    CTX --> MV[(Milvus：摘要向量索引)]
-    SEARCH --> TOOLS[Bocha / 知识库检索 / 只读 SQL]
-    CHART --> BOX[Docker 隔离执行]
+    UI[研究工作台] --> API[FastAPI · 鉴权与任务接口]
+    API --> R[Runtime · 状态与事件持久化]
+    R --> I{意图与用户模式}
+    I -->|问答 / 历史回顾 / SQL| Q[轻量执行]
+    I -->|深度研究| P[Architect · 规划]
+    P --> S[Scout · 章节检索与追查]
+    S --> A[Analyst · 事实分析与关系抽取]
+    A --> C[Wizard · 证据校验与沙箱绘图]
+    C --> W[Writer · 分章写作与报告组装]
+    W --> V{Critic · 审核}
+    V -->|补充证据| S
+    V -->|修订正文| W
+    V -->|通过 / 达到迭代上限| O[报告与成果 · 保留未解决问题]
+    Q --> O
+    R --> DB[(PostgreSQL · 检查点 / 事件 / 历史)]
+    DB --> E[SSE · 增量事件与断线补读]
+    E --> UI
+    S --> T[Bocha / 知识库 / 只读 SQL]
+    C --> D[Docker 隔离执行]
 ```
 
-系统由 **Python 异步状态机**统一调度规划、检索、分析、绘图、写作和审核六类 Agent。主要阶段按依赖顺序执行，章节检索分批并发；审核结果驱动补充检索或内容修订。研究编排入口为 [`assistant/full_research.py`](backend/app/service/assistant/full_research.py)，任务生命周期与恢复由 [`assistant/runtime.py`](backend/app/service/assistant/runtime.py) 管理。
+当前主链路是 **自定义 Python 异步状态机，协作调用六类专业 Agent**。角色通过结构化状态交换大纲、事实、来源快照、章节、图表和审核结果；主要阶段按依赖顺序执行。章节检索使用固定并发工作队列，完成一章即可领取下一章，无需等待同批最慢章节。
 
-## 关键设计
+多 Agent 表示职责、提示词及输出契约的划分，不要求六种不同模型，也不表示所有阶段同时运行。当前生产入口不依赖 LangGraph。
 
-### 1. 意图路由与审核闭环
+## 核心设计
 
-根据用户指定模式及问题意图，区分完整研究、普通问答、历史回顾和 SQL 查询。历史回顾优先使用会话与记忆上下文，完整研究进入六角色流程。
+### 1. 研究任务与网页连接分离
 
-各角色共享研究大纲、事实与来源快照、章节草稿、图表及审核记录。审核不通过时，根据问题进入补充检索或内容修订分支；初审后最多追加三次补查 / 修订，达到上限仍有缺口时保留部分结果及原因。
+后台异步执行研究，浏览器通过 SSE 订阅进度。关闭页面不会直接取消研究；事件使用递增序号，重新连接可按 `after=N` 补读。
 
-审核通过要求同时满足模型给出 `pass`、评分至少 7 分，以及不存在 `critical` / `major` 问题。该判定用于流程控制，评分本身不作为报告准确率或客观质量指标。
+PostgreSQL JSONB 保存阶段检查点及可序列化产物，队列、连接等运行时对象不入库。后端重启后，遗留活动任务标记为 `interrupted`，恢复入口继续已提交阶段；尚未提交的外部请求可能再次执行。报告、终态与结果消息在同一事务写入，通过 `run_id` 避免重复保存结果。
 
-**代码：** [意图控制器](backend/app/service/assistant/controller.py) · [研究状态机](backend/app/service/assistant/full_research.py) · [角色实现](backend/app/service/deep_research_v2/agents)
+任务区分 `completed`、`partial`、`failed`、`cancelled`、`interrupted` 等状态。完整研究没有总时长上限，但模型请求、工具资源与审核次数各自受限；当前运行时面向单进程部署。
 
-### 2. 长任务生命周期与阶段恢复
+### 2. 长报告分段生成，避免一次输出承载全文
 
-HTTP 请求负责创建任务和订阅结果，运行时通过后台异步任务执行研究。角色事件经 `asyncio.Queue` 汇入统一流程，阶段事件与状态落库后通过 SSE 展示；同步上下文读取通过 `asyncio.to_thread` 移出事件循环。
+检索与分析按批处理并保留子步骤结果。写作先完成和保存各章，再调用模型生成有限长度的摘要与结尾，由程序组装正文；对比题额外生成核心对照表，归纳最影响选择的差异。
 
-- **持久化检查点：** PostgreSQL JSONB 保存阶段状态、来源快照和章节产物，队列等运行时对象不进入持久化数据。
-- **订阅与执行分离：** 浏览器断连不会取消研究，SSE 使用递增 `seq`，支持通过 `after=N` 补读事件。
-- **结果一致性：** 最终报告、任务终态与助手消息在同一事务写入，通过 `run_id` 避免重复保存结果消息。
-- **中断恢复：** 后端启动时将遗留活动任务标记为 `interrupted`，恢复时继续已提交的阶段；未提交的外部请求可能重试。
-- **调用边界：** 完整研究不设总时长上限，单次模型请求默认限制为 600 秒，覆盖持续流式输出；工具执行与审核迭代分别受限。
+审核修订以片段为单位，纯来源目录由程序原样保留，不交给模型扩写。遇到输出截断，缩小片段后有限重试，已完成章节不被不完整 JSON 覆盖。模型网关记录角色、模型、请求上限、实际 Token、耗时、结束原因与思考模式，区分输出截断、额度不足、参数不兼容和网络超时。
 
-运行状态包括 `queued`、`running`、`completed`、`partial`、`failed`、`cancelled` 和 `interrupted`。当前为单进程运行时，未实现分布式调度或外部调用的 exactly-once 语义。
+### 3. 图表由证据驱动
 
-**代码：** [任务运行时](backend/app/service/assistant/runtime.py) · [HTTP / SSE 接口](backend/app/router/assistant_router.py) · [模型网关](backend/app/service/assistant/llm.py)
+```text
+来源快照 → 逐图规划 → 提取原文数据 → 必要时定向补查
+        → 绑定实体 / 指标 / 数值 / 单位 / 期间 → 数据契约校验
+        → 固定模板 → Docker 沙箱渲染 → 图片 + 数据明细 + 来源
+```
 
-### 3. 分层记忆与上下文预算
+每张图独立处理和保存，失败不会清空其他成功图表。数据必须绑定实际检索原文；换算记录依据，区分实际值、预测值和目标值。缺失配对或矩阵单元不补零，雷达图不生成主观评分。
 
-原始会话、压缩摘要和检索索引分别承担不同职责。滑动窗口只裁剪提供给模型的上下文，不删除历史消息。
+支持折线、柱状、横向条形、饼图、环形、分组柱状、百分比堆叠、雷达、散点和热力图。**类型由数据结构决定，不承诺每份报告都有图或固定图数。** 不完整市场份额可保留原百分比转为柱状图，并标注只覆盖部分主体，不补造“其他”或重新归一化。
 
-| 层次 | 存储与策略 | 异常处理 |
+代码运行于独立 Docker 容器：禁网、非 root、只读根目录，不挂载宿主目录和 Docker socket，不注入密钥，并限制 CPU、内存、进程数及执行时间。沙箱不可用时明确失败，不回退到宿主执行生成代码。
+
+### 4. 审核闭环与可解释的缺口
+
+初审后最多三次补查或修订，根据问题返回检索或写作。通过条件为模型结论 `pass`、评分至少 7 分，且不存在 `critical / major` 问题；结构化报告校验也参与终态判断。
+
+审核要求对齐主体、指标、期间及口径，定位问题原句。来源不足可以记录为研究局限，不能通过虚构来源或数字补齐。达到上限仍未解决的问题随报告保留为 `partial`。模型审核评分用于流程路由，不是准确率。
+
+引用在导出时映射为实际来源编号；数值与引用校验可以发现部分错误，但不等同于完整事实核验。
+
+### 5. Redis + PostgreSQL + Milvus 分层记忆
+
+| 层次 | 职责 | 加载与异常处理 |
 | --- | --- | --- |
-| 近期对话 | Redis 缓存最近消息，按 Token 估算预算从新到旧选取上下文 | 缓存失效或不可用时，从 PostgreSQL 恢复 |
-| 当前会话摘要 | LLM 增量提取摘要、关键洞察、关注主题与未解决问题，保存到 PostgreSQL | 摘要失败不推进处理游标 |
-| 跨会话记忆 | Milvus 建立摘要向量索引，按相关性召回同一用户的历史摘要 | 核对记录归属、修订版本与删除状态；索引失败保留摘要并支持重试 |
+| PostgreSQL 完整历史 | 保存原始问答，提供会话回看 | 按会话读取；滑动窗口不删除历史 |
+| Redis 近期对话 | 缓存最近消息 | 按 Token 估算预算选择窗口，失效回源数据库 |
+| PostgreSQL 长期摘要 | 保存摘要、关键洞察、主题及未解决问题 | LLM 增量压缩，失败不推进处理游标 |
+| Milvus 摘要索引 | 支持跨会话语义召回 | 按用户过滤，核对版本及删除状态；索引失败可重试 |
 
-默认两轮完整问答或新增内容达到约 1,600 Token 后触发摘要；近期对话窗口约 3,000 Token，当前摘要约 1,200 Token，跨会话最多召回 3 条。Token 使用 `cl100k_base` 估算，不能视为所有供应商模型的精确计数。记忆作为背景上下文注入，不进入事实证据集合。
+模型上下文由近期对话、当前摘要及相关历史摘要共同组成。记忆只作背景，不自动成为事实证据；当前不依赖额外的用户画像功能。
 
-**代码：** [上下文组装与摘要](backend/app/service/assistant/memory_context.py) · [缓存与向量索引](backend/app/service/assistant/memory_store.py)
+## 代码导航
 
-### 4. 工具约束与代码隔离
-
-| 执行边界 | 机制 |
+| 模块 | 入口 |
 | --- | --- |
-| 资料访问 | 工具调用遵循用户选择的来源范围；知识库及会话数据按用户过滤 |
-| SQL 查询 | 限定业务表与语法子集，核验执行计划中的关系，使用只读事务、执行超时与返回行数限制 |
-| 代码执行 | 每次创建独立 Docker 容器：断网、非 root、只读根目录，不挂载宿主目录和 Docker socket，不注入项目密钥 |
-| 资源限制 | 默认 1 CPU、512 MB 内存、32 个进程、60 秒超时；限制文本与图片输出，取消或超时后清理容器 |
-| 失败处理 | 缺失沙箱镜像时明确失败，不使用宿主 Python 兜底执行生成代码 |
-
-**代码：** [工具入口](backend/app/service/assistant/tools.py) · [SQL 策略](backend/app/service/assistant/sql_policy.py) · [沙箱执行器](backend/app/service/deep_research_v2/sandbox.py)
-
-### 5. 证据与图表的数据约束
-
-检索结果保存为来源快照，报告引用映射为证据编号；仅实际获取的来源进入事实集合。绘图前校验数据点的数值、单位、年份及引用原句，检查统计口径与期间一致性，区分实际值、预测值和目标值。
-
-缺少符合约束的数据时保留缺口，不为凑齐图表数量补造数据。引用编号校验及原句匹配能够发现部分结构性错误，但不能替代事实语义核验与来源可靠性判断。
-
-**代码：** [图表数据契约](backend/app/service/deep_research_v2/chart_contract.py) · [报告与图表展示](frontend/src/pages/research/full-report-details.tsx)
-
-## 验证与测试
-
-测试侧重执行约束、异常分支和状态一致性。模型或专家替身用于确定性故障测试；数据库与 Docker 相关用例需要本地依赖。以下为现有测试覆盖范围，不代表对真实报告质量完成了基准评测。
-
-| 测试入口 | 主要检查内容 |
-| --- | --- |
-| [发布接口](backend/app/scripts/test_app_routes.py) | 核心路由注册、旧入口移除、健康检查与未登录访问边界 |
-| [研究编排](backend/app/scripts/test_full_research.py) | 章节覆盖、审核修订、阶段恢复、取消时回收并发任务 |
-| [任务运行时](backend/app/scripts/test_personal_runtime.py) | 结果去重、已提交步骤恢复、取消后禁止写入、额度与超时错误 |
-| [分层记忆](backend/app/scripts/test_layered_memory.py) | 缓存回填、Token 窗口、增量摘要、用户隔离、删除与索引重试 |
-| [模型网关](backend/app/scripts/test_model_gateway.py) | 流式拼接、空响应与 JSON 错误、截断识别、整次请求超时 |
-| [图表契约](backend/app/scripts/test_chart_contract.py) | 虚构数值、混合单位、跨期间混用、预测值冒充实际值 |
-| [Docker 沙箱](backend/app/scripts/test_research_sandbox.py) | 禁网、宿主文件不可见、只读文件系统、资源上限与取消清理 |
-
-在已准备依赖的 Python 环境中，可从项目根目录分别运行：
-
-```powershell
-python backend/app/scripts/test_model_gateway.py
-python backend/app/scripts/test_chart_contract.py
-python backend/app/scripts/test_personal_runtime.py
-python backend/app/scripts/test_layered_memory.py
-python backend/app/scripts/test_research_sandbox.py
-```
-
-运行时与记忆测试创建隔离测试记录，需要 PostgreSQL / Redis 配置；沙箱测试使用本机已有的 `python:3.11-slim` 镜像，不自动下载。确定性用例通过说明对应机制满足断言，报告质量仍需使用真实任务单独评估。
-
-## 界面展示
-
-研究工作台提供模式选择、资料范围控制和历史会话入口。
-
-![研究工作台](assets/readme/workspace.jpg)
+| 生命周期、事件与恢复 | [runtime.py](backend/app/service/assistant/runtime.py) |
+| 六角色调度与审核路由 | [full_research.py](backend/app/service/assistant/full_research.py) |
+| 模型请求与角色配置 | [llm.py](backend/app/service/assistant/llm.py) · [llm_config.py](backend/app/config/llm_config.py) |
+| 专业角色及提示词 | [agents/](backend/app/service/deep_research_v2/agents) |
+| 章节组装与片段修订 | [writing_pipeline.py](backend/app/service/deep_research_v2/writing_pipeline.py) |
+| 逐图处理与数据约束 | [chart_pipeline.py](backend/app/service/deep_research_v2/chart_pipeline.py) · [chart_contract.py](backend/app/service/deep_research_v2/chart_contract.py) |
+| 记忆与上下文 | [memory_context.py](backend/app/service/assistant/memory_context.py) · [memory_store.py](backend/app/service/assistant/memory_store.py) |
+| 工具与隔离 | [tools.py](backend/app/service/assistant/tools.py) · [sql_policy.py](backend/app/service/assistant/sql_policy.py) · [sandbox.py](backend/app/service/deep_research_v2/sandbox.py) |
+| 前端研究工作台 | [research/](frontend/src/pages/research) |
 
 <details>
-<summary>查看报告阅读与长期摘要管理</summary>
+<summary>查看研究首页与会话摘要界面</summary>
 
-报告展示章节、引用编号和研究过程；长期摘要管理展示来源会话、关注主题与关键洞察。
+![研究首页](assets/readme/workspace.png)
 
-![报告阅读](assets/readme/research-report.jpg)
-
-![长期摘要管理](assets/readme/session-memory.jpg)
+![会话与长期摘要](assets/readme/session-memory.png)
 
 </details>
 
-截图使用当前前端组件与演示数据，展示完成状态及报告内容均不作为真实验收结果。[截图说明与复现入口](assets/readme/README.md)
+## 运行与配置
 
-## 本地运行
-
-当前启动脚本面向 Windows 已配置环境，使用现有 Python / Node 依赖与 Docker 镜像。首次下载需准备依赖，复制配置模板并填写本机路径和服务参数。
+启停脚本面向 **Windows 本地开发环境**。先准备 Python / Node 依赖、Docker Desktop 与服务配置；依赖清单见 [backend/requirements.txt](backend/requirements.txt) 和 [frontend/package.json](frontend/package.json)。本机路径及启动说明见 [自用启停.md](自用启停.md)。
 
 ```powershell
-# 在项目根目录执行；已存在配置时保留原文件
+# 从项目根目录执行，保留已有配置
 if (!(Test-Path services.local.psd1)) { Copy-Item services.local.example.psd1 services.local.psd1 }
 if (!(Test-Path backend/.env)) { Copy-Item backend/.env.example backend/.env }
 if (!(Test-Path frontend/.env)) { Copy-Item frontend/.env.example frontend/.env }
 
-# 编辑配置并启动 Docker Desktop 后，启动本项目服务
+# 填写配置，启动 Docker Desktop，再启动 / 停止本项目
 powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1
-
-# 停止服务，保留数据卷
 powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1
-
-# 更换同一 API 提供方的模型 ID，并重启后端
-powershell -NoProfile -ExecutionPolicy Bypass -File .\set-model.ps1 -ModelId '你的模型ID'
 ```
 
-前端：[127.0.0.1:5183](http://127.0.0.1:5183/)；后端连通检查：[127.0.0.1:8000/hello](http://127.0.0.1:8000/hello)。
+前端：[127.0.0.1:5183](http://127.0.0.1:5183/)；后端健康检查：[127.0.0.1:8000/hello](http://127.0.0.1:8000/hello)。停止脚本保留数据卷。
 
-核心配置包括模型的 `DASHSCOPE_API_KEY` / `DASHSCOPE_BASE_URL` / `OPENAI_MODEL`、Bocha 搜索密钥、DocMind 凭据、PostgreSQL / Redis / Milvus 连接与 `JWT_SECRET_KEY`。设置 `LLM_BASE_URL` 时它优先；`OPENAI_MODEL` 不控制 Embedding / Rerank 模型。配置模板见 [backend/.env.example](backend/.env.example)，启停说明见 [自用启停.md](自用启停.md)。
-
-分析绘图使用 `industry-research-sandbox:local` 镜像。首次构建前需准备 Docker 并允许安装镜像内依赖：
+模型、Bocha、DocMind 及 PostgreSQL / Redis / Milvus 参数集中在 [backend/.env.example](backend/.env.example)。DocMind 仅文档解析需要。绘图需先构建沙箱镜像：
 
 ```powershell
 docker build --pull=false -t industry-research-sandbox:local backend/sandbox
 ```
 
-`.env`、本地路径配置、用户资料、运行日志与 `docs/` 不纳入仓库；运行数据保存在本机及 Docker 数据卷中。
+**更换模型：** 同一 API 提供方内，可以用脚本修改主模型并重启后端；请在没有活动研究时操作。
 
-## 适用范围与后续工作
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\set-model.ps1 -ModelId 'qwen3.7-plus'
+```
 
-- **研究质量：** 当前采用模型审核和结构化约束，尚无固定评测集上的质量、时延、成本对比。下一步应记录证据覆盖、引用支持、任务完成率及每任务调用成本。
-- **信息获取：** 网页检索包含搜索摘要，未覆盖所有来源的全文抓取；研究模板对不同题型的适配仍需完善。
-- **数据接入：** Text2SQL 当前限定 `industry_stats`、`company_data`、`policy_data` 三张业务表；本机演示数据为虚构样本，尚无通用数据源连接管理。
-- **运行扩展：** 当前为单进程部署，可进一步引入持久任务队列与多工作进程调度；本地部署仍依赖外部模型、搜索与解析服务。
+搜索角色可在 `backend/.env` 单独设置 `RESEARCH_SEARCH_MODEL`，留空跟随 `OPENAI_MODEL`，例如主模型 Plus、搜索角色 Flash。配置不改变 Bocha 接口，也不改变 Embedding / Rerank 模型。`RESEARCH_ENABLE_THINKING=false` 为当前默认；切换提供方时还需核对 Base URL、密钥、额度及参数支持。
+
+`.env`、本地路径配置、用户资料、运行日志与 `docs/` 不发布到仓库。
+
+## 验证与边界
+
+测试针对执行机制：模型替身制造截断、协议错误与重试场景，真实 Docker 用例验证隔离。2026-09-21 对本次研究修复执行的 **155 项回归测试全部通过，其中 10 项为 Docker 隔离测试**。这不等同于真实研究完成率或报告准确率。
+
+| 验证范围 | 测试入口 |
+| --- | --- |
+| 角色模型并发隔离、原文引用、份额提取与对照表组装 | [test_quality_upgrade.py](backend/app/scripts/test_quality_upgrade.py) |
+| 章节覆盖、审核路由、阶段恢复与取消 | [test_full_research.py](backend/app/scripts/test_full_research.py) |
+| 流式响应、输出截断、参数适配与超时 | [test_model_gateway.py](backend/app/scripts/test_model_gateway.py) |
+| 长报告组装、片段修订与章节保留 | [test_writing_pipeline.py](backend/app/scripts/test_writing_pipeline.py) |
+| 原文绑定、单位期间与逐图恢复 | [test_chart_bindings.py](backend/app/scripts/test_chart_bindings.py) · [test_chart_pipeline.py](backend/app/scripts/test_chart_pipeline.py) |
+| 历史回填、摘要游标、用户隔离与索引重试 | [test_layered_memory.py](backend/app/scripts/test_layered_memory.py) |
+| 禁网、宿主隔离、只读文件系统与取消清理 | [test_research_sandbox.py](backend/app/scripts/test_research_sandbox.py) |
+
+在已有依赖的 Python 环境中，从项目根目录运行对应脚本：
+
+```powershell
+python backend/app/scripts/test_quality_upgrade.py
+python backend/app/scripts/test_writing_pipeline.py
+python backend/app/scripts/test_research_sandbox.py
+```
+
+数据库与记忆测试需要本地服务；沙箱测试使用已有镜像，不自动拉取。[十类图表验收脚本](backend/app/scripts/verify_chart_gallery.py)使用明确标注的测试数据，不消耗模型额度。
+
+- **信息覆盖：** 联网搜索主要通过 Bocha，部分来源只有摘要，不保证全文或付费数据库覆盖。
+- **研究质量：** 依赖模型能力与证据质量；尚无固定代表性任务集上的质量、成本和时延基准，不能用单次结果推断整体准确率。
+- **业务数据：** Text2SQL 限定 `industry_stats`、`company_data`、`policy_data` 三张业务表及受限语法；演示样本不代表真实业务。
+- **部署规模：** 尚未提供分布式任务队列及多工作进程调度，外部请求重试不具备 exactly-once 保证。
