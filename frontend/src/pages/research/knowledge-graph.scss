@@ -1,0 +1,21 @@
+.research-knowledge-graph {
+  .graph-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; color: #777d76; font-size: 12px; }
+  .graph-toolbar > div { display: flex; gap: 6px; }
+  button, select { border: 1px solid #dce1da; background: #fff; border-radius: 6px; padding: 5px 10px; color: #414740; font: inherit; }
+  button { cursor: pointer; }
+  button:hover { background: #f1f5ef; }
+  button:focus-visible, select:focus-visible { outline: 2px solid #377f70; outline-offset: 2px; }
+  .graph-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 14px; color: #646963; font-size: 11px; }
+  .graph-legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .graph-legend i { width: 9px; height: 9px; border-radius: 50%; }
+  .graph-canvas { width: 100%; height: 480px; margin-top: 12px; border-radius: 10px; background: #fafbf8; overflow: hidden; }
+  .graph-relations { margin-top: 16px; font-size: 13px; }
+  .graph-relations label { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+  .graph-relations select { max-width: 100%; }
+  .graph-relations ul { max-height: 200px; overflow: auto; list-style: none; padding: 0; margin: 10px 0; }
+  .graph-relations li { display: flex; flex-wrap: wrap; gap: 8px; padding: 7px 0; border-bottom: 1px solid #ecefe8; }
+  .graph-relations li span { color: #777d76; }
+  .graph-relations strong { font-weight: 500; }
+  .graph-note { color: #878b83; font-size: 12px; line-height: 1.6; }
+  @media (max-width: 600px) { .graph-canvas { height: 390px; } }
+}

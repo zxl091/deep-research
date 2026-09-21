@@ -2,6 +2,10 @@ import { request } from './request'
 
 export interface Evidence { id: string; title: string; url: string; content: string; source: string; sql?: string; retrieved_at?: string }
 export interface RunEvent { seq: number; type: string; message: string; time: string }
+export interface ResearchGraph {
+  nodes: { id: string; name: string; type?: string; size?: number; importance?: number }[]
+  edges: { source: string; target: string; relation?: string }[]
+}
 export interface ResearchRun {
   id: string; session_id: string; query: string; status: string; report: string; events: RunEvent[]; created_at: string
   state: {
@@ -14,7 +18,9 @@ export interface ResearchRun {
     engine?: string
     outline?: { id: string; title: string; status?: string }[]
     draft_sections?: Record<string, string>
-    charts?: { id?: string; title?: string; chart_type?: string; image_base64?: string; echarts_option?: Record<string, unknown>; verified_data?: boolean; data_contract?: { coverage_note?: string; points: { label: string; value: number; unit: string; period: string; value_kind: string; source_url: string; quote: string }[] } }[]
+    knowledge_graph?: ResearchGraph
+    charts?: { id?: string; title?: string; chart_type?: string; image_base64?: string; echarts_option?: Record<string, unknown>; verified_data?: boolean; data_contract?: { type?: string; coverage_note?: string; display_note?: string; points: { label: string; series?: string; metric?: string; value: number; unit: string; period: string; value_kind: string; source_url: string; quote: string; context_quote?: string; period_note?: string; observation?: { schema_version: number; entity: string; metric: string; period: { start: string; end: string; granularity: string }; statistical_scope?: string | null; aggregation?: string | null; unknown_fields?: string[]; binding: string }; conversion_note?: string; qualifier?: string }[] } }[]
+    chart_validation?: { items?: { plan_id: string; title?: string; status: string; points?: number; errors?: string[] }[] }
     review_history?: { overall_assessment?: { verdict?: string; quality_score?: number; summary?: string }; issues?: { description?: string; severity?: string }[] }[]
   }
 }

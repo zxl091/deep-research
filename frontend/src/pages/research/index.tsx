@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Alert, Button, Drawer, Input, Select, Spin, Tag, message } from 'antd'
-import { ArrowUpOutlined, FileTextOutlined, PlusOutlined, StopOutlined, ReloadOutlined, DownOutlined } from '@ant-design/icons'
+import { Alert, Button, ConfigProvider, Drawer, Input, Select, Spin, Tag, message } from 'antd'
+import { ArrowUpOutlined, PlusOutlined, StopOutlined, DownloadOutlined, ReadOutlined, CheckCircleOutlined, MessageOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import * as sessions from '@/api/session'
 import { getKnowledgeBases, type KnowledgeBase } from '@/api/knowledge'
 import * as assistant from '@/api/assistant'
@@ -10,11 +10,13 @@ import { authState } from '@/store/auth'
 import { openSource } from '@/utils/source-link'
 import Report from './report'
 import SourcePicker from './source-picker'
-import FullReportDetails from './full-report-details'
+import ResultWorkbench from './result-workbench'
+import ConversationTurn from './conversation-turn'
+import { downloadText, reportStructure, statusLabels } from './result-utils'
 import './workspace.scss'
+import './workbench.scss'
 
 const active = (r: ResearchRun | null) => !!r && ['queued', 'running'].includes(r.status)
-const labels: Record<string, string> = { queued: '等待开始', running: '正在研究', completed: '已完成', partial: '部分完成', cancelled: '已取消', interrupted: '运行中断', failed: '执行失败' }
 const examples = ['比较两份文档的核心观点，标出共识与分歧', '比较 RAG 与长上下文两种知识库问答方案，分析适用场景、优势与限制，并给出选择建议', '统计业务数据的变化趋势，并解释查询口径']
 
 export default function ResearchWorkspace() {
@@ -36,10 +38,14 @@ export default function ResearchWorkspace() {
   const [loading, setLoading] = useState(false)
   const [connectionError, setConnectionError] = useState('')
   const [evidence, setEvidence] = useState<Evidence | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [mobilePane, setMobilePane] = useState<'conversation' | 'results'>('conversation')
+  const conversation = useRef<HTMLDivElement>(null)
+  const selectedRun = runs.find(item => item.id === selectedId) || run
 
   useEffect(() => { getKnowledgeBases().then(r => setKbs(r.data)).catch(() => message.error('知识库列表加载失败')) }, [])
   useEffect(() => {
-    setRun(null); setRuns([]); setHistory([]); setHasOlder(false); setConnectionError(''); setTitle(''); setLoading(false)
+    setSelectedId(null); setMobilePane('conversation'); setEvidence(null); setRun(null); setRuns([]); setHistory([]); setHasOlder(false); setConnectionError(''); setTitle(''); setLoading(false)
     if (!id) return
     let live = true
     setLoading(true)
@@ -58,6 +64,7 @@ export default function ResearchWorkspace() {
   // 事件流只负责订阅。断开、切换页面均不会取消服务端任务。
   const runId = run?.id
   const running = active(run)
+  useEffect(() => { conversation.current?.scrollTo(0, conversation.current.scrollHeight) }, [runId])
   useEffect(() => {
     if (!runId || !running) return
     const controller = new AbortController()
@@ -122,7 +129,7 @@ export default function ResearchWorkspace() {
       let sessionId = id
       if (!sessionId) sessionId = (await sessions.createSession({ title: '新的研究', session_type: 'deepsearch' })).data.id
       const result = await assistant.createRun({ session_id: sessionId, query: query.trim(), mode, sources, kb_ids: kbIds, use_memory: useMemory })
-      setQuery('')
+      setQuery(''); setSelectedId(null)
       if (id !== sessionId) navigate(`/chat/${sessionId}`)
       else { setRun(result.data); setRuns(old => [result.data, ...old]) }
     } catch { message.error('任务未能启动，请检查资料选择与连接后重试') }
@@ -145,61 +152,51 @@ export default function ResearchWorkspace() {
     try {
       const response = await (action === 'cancel' ? assistant.cancelRun(target.id) : assistant.resumeRun(target.id))
       setRun(response.data)
+      setSelectedId(response.data.id)
       setRuns(old => old.map(r => r.id === response.data.id ? response.data : r))
     }
     catch { message.error('操作未完成，请刷新任务状态后重试') }
     finally { setBusy(false) }
   }
 
-  return <main className="research-workspace">
-    <header className="workspace-topbar"><span className="topbar-title" title={title}>{id ? title || '研究会话' : '新研究'}</span><Button icon={<PlusOutlined />} onClick={() => navigate('/')}>新的研究</Button></header>
-    <div className={`workspace-body ${run ? 'has-run' : ''} ${id ? 'is-session' : 'is-home'}`}>
-      {!id && <section className="research-hero"><h1>今天想研究什么？</h1><p>查阅资料、比较观点，得到有来源的结论。</p></section>}
-      {connectionError && <Alert type="warning" message={connectionError} showIcon style={{ marginBottom: 16 }} />}
-      {loading && <div className="workspace-loading"><Spin /> 正在读取研究记录</div>}
-      {hasOlder && <Button className="load-older-turns" loading={loadingOlder} onClick={() => void loadOlder()}>加载更早的问答</Button>}
-      {[...runs].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)).map(turn => {
-        const run = turn
-        const turnRunning = active(run)
-        return <section className="run-layout conversation-turn" key={run.id} aria-label={`问答：${run.query}`}>
-        <div className="user-question"><h2>{run.query}</h2></div>
-        <details className="process-panel" open={turnRunning}><summary className="process-heading"><span className={turnRunning ? 'live-dot' : 'idle-dot'} /><span>研究过程</span><span>第 {run.state.round} 轮</span><DownOutlined /></summary>
-          <ol className="process-timeline">{run.events.map(event => <li key={event.seq}><span>{event.message}</span><time>{new Date(event.time + (event.time.endsWith('Z') ? '' : 'Z')).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></li>)}</ol>
-          <div className="run-metrics"><div><b>{run.state.usage.tool_calls}</b><span>工具调用</span></div><div><b>{run.state.usage.model_calls}</b><span>模型调用</span></div><div><b>{run.state.usage.prompt_tokens + run.state.usage.completion_tokens}</b><span>Token</span></div></div>
-          {!!run.state.warnings.length && <Alert type="warning" message={run.state.warnings.join('；')} />}
-        </details>
-        <article className="report-panel">
-          <div className="report-heading"><Tag>{labels[run.status] || run.status}</Tag>{run.state.engine === 'full_research_v2' && <Tag>完整研究报告</Tag>}{run.state.plan?.intent === 'recall' && <Tag>历史回顾</Tag>}
-          </div>
-          {run.report ? <Report content={run.report} /> : <div className="research-pending">{turnRunning ? <Spin size="small" /> : <FileTextOutlined />}<span>{run.state.error || (turnRunning ? '正在整理资料，完成后将在这里呈现结论。' : '本次任务尚未生成报告。')}</span>
-            {run.state.plan?.questions && <ul>{run.state.plan.questions.map((q, i) => <li key={i}>{q}</li>)}</ul>}</div>}
-          <FullReportDetails run={run} />
-          {run.state.context_usage && <details className="evidence-list"><summary>本轮记忆 · 召回 {run.state.context_usage.recalled || 0} 条旧会话摘要</summary>
-            <p>近期对话：{run.state.context_usage.short_term === 'redis' ? 'Redis 缓存' : '从数据库恢复'}，约 {run.state.context_usage.history_tokens || 0} Token；当前会话摘要约 {run.state.context_usage.summary_tokens || 0} Token。</p>
-            <p>跨会话检索：{run.state.context_usage.long_term_enabled ? '已开启' : '已关闭'}。Token 使用 cl100k_base 估算，不等于模型账单用量。</p>
-            {run.state.context_usage.warnings?.map(text => <p key={text}>{text}</p>)}
-            {run.state.context_usage.references?.map(item => <p key={item.id}><Button type="link" onClick={() => navigate(`/chat/${item.session_id}`)}>{item.title}</Button>相关度 {item.score}</p>)}
-            {run.state.memory_update && <p>摘要整理：{run.state.memory_update.status === 'saved' ? (run.state.memory_update.index_status === 'ready' ? '已保存并建立向量索引' : '已保存，索引待重试') : run.state.memory_update.status === 'failed' ? '失败，原始对话保留' : '暂无足够的新消息'}</p>}
-          </details>}
-          <div className="run-controls">{turnRunning && <Button icon={<StopOutlined />} loading={busy} onClick={() => void controlRun('cancel', run)}>停止研究</Button>}
-            {['failed', 'interrupted'].includes(run.status) && <Button icon={<ReloadOutlined />} disabled={running || busy} loading={busy} onClick={() => void controlRun('resume', run)}>从已完成步骤继续</Button>}</div>
-          {!!run.state.evidence.length && <details className="evidence-list"><summary>查看来源 <span>{run.state.evidence.length}</span></summary>{run.state.evidence.map(e => <button key={e.id} className="evidence-row" onClick={() => setEvidence(e)}><span className="evidence-id">{e.id}</span><div><strong>{e.title}</strong><small>{e.source === 'knowledge' ? '个人知识库' : e.source === 'database' ? '业务查询快照' : '公开网页'}</small></div><span>↗</span></button>)}</details>}
-        </article>
+  const selectResult = (target: string) => { setSelectedId(target); setMobilePane('results') }
+  const exportReport = () => {
+    if (!selectedRun?.report) return
+    const name = reportStructure(selectedRun.report).headings[0]?.title || selectedRun.query
+    downloadText(selectedRun.report, `${name.slice(0, 80)}.md`)
+  }
 
-      </section>})}
-      {id && !run && !loading && !!history.length && <article className="report-panel legacy-history"><Tag>历史会话</Tag>{history.map(m => <section key={m.id}><h3>{m.role === 'user' ? '你的问题' : '助手回复'}</h3><Report content={m.content} /></section>)}</article>}
-      <section className="research-composer">
-        <Input.TextArea aria-label="研究问题" value={query} onChange={e => setQuery(e.target.value)} autoSize={{ minRows: 2, maxRows: 8 }} placeholder={id ? '围绕当前结论继续提问，或补充研究要求…' : '提出一个问题，或描述你想了解的主题…'} disabled={running} maxLength={8000} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') void submit() }} />
-        <div className="composer-footer"><div className="composer-tools">
-          <SourcePicker sources={sources} onToggle={toggleSource} kbs={kbs} kbIds={kbIds} onKbsChange={setKbIds} useMemory={useMemory} onMemoryChange={setUseMemory} disabled={running} />
-          <Select aria-label="研究模式" value={mode} disabled={running} onChange={value => { setMode(value); if (value === 'sql') toggleSource('database', true) }} variant="borderless" options={[{ value: 'research', label: '深度研究' }, { value: 'auto', label: '自动识别' }, { value: 'answer', label: '简洁问答' }, { value: 'sql', label: '数据库查询' }]} />
-        </div><div className="composer-submit"><small>⌘ / Ctrl ↵</small><Button type="primary" shape="circle" aria-label={running ? '停止研究' : id ? '发送追问' : '开始研究'} title={running ? '停止研究' : '发送问题'} icon={running ? <StopOutlined /> : <ArrowUpOutlined />} loading={busy} disabled={!running && (!query.trim() || loading)} onClick={() => running ? void controlRun('cancel') : void submit()} /></div></div>
-      </section>
-      {!run && mode === 'research' && <p className="research-mode-hint">完整研究：专题检索、数据分析、分章写作与审核修订，不设总时长上限，可随时手动停止。</p>}
-      {!id && <div className="research-examples">{examples.map((example, i) => <button key={example} onClick={() => { setQuery(example); setMode(i === 2 ? 'sql' : 'research'); setSources(i === 0 ? ['local'] : i === 2 ? ['database'] : ['web']) }}><PlusOutlined />{['比较文档', '调研专题', '查询数据'][i]}</button>)}</div>}
+  return <ConfigProvider theme={{ token: { colorPrimary: '#2563eb', colorText: '#27272a', colorTextSecondary: '#71717a', colorBorder: '#e4e4e7' } }}><main className={`research-workspace research-studio mobile-${mobilePane}`}>
+    <header className="studio-header">
+      <a href="/" className="studio-brand"><ReadOutlined /><strong>DeepResearch</strong></a>
+      <span className="studio-project" title={title}>{id ? title || '研究会话' : '个人研究工作台'}</span>
+      <div className="studio-header-actions">{selectedRun && <span className={`studio-status status-${selectedRun.status}`}>{active(selectedRun) ? <Spin size="small" /> : selectedRun.status === 'completed' ? <CheckCircleOutlined /> : <ExclamationCircleOutlined />}{statusLabels[selectedRun.status]}</span>}<Button icon={<DownloadOutlined />} type="primary" disabled={!selectedRun?.report} onClick={exportReport} title="下载 Markdown 格式的研究报告">导出报告</Button></div>
+    </header>
+    <div className="mobile-pane-switch"><button className={mobilePane === 'conversation' ? 'active' : ''} onClick={() => setMobilePane('conversation')}><MessageOutlined />研究对话</button><button className={mobilePane === 'results' ? 'active' : ''} onClick={() => setMobilePane('results')}><ReadOutlined />研究成果</button></div>
+    <div className="studio-body">
+      <aside className="conversation-pane" aria-label="研究对话">
+        <div className="conversation-pane-heading"><h1>研究对话</h1><Button type="text" aria-label="新的研究" title="新的研究" icon={<PlusOutlined />} onClick={() => navigate('/')} /></div>
+        <div className="conversation-scroll" ref={conversation}>
+          {connectionError && <Alert type="warning" message={connectionError} showIcon />}
+          {loading && <div className="workspace-loading"><Spin /> 正在读取研究记录</div>}
+          {!id && <section className="conversation-welcome"><span className="welcome-mark"><ReadOutlined /></span><h2>今天想研究什么？</h2><p>提出主题，选择资料。<br />把复杂问题整理成有依据的结论。</p><div className="welcome-examples">{examples.map((example, i) => <button key={example} onClick={() => { setQuery(example); setMode(i === 2 ? 'sql' : 'research'); setSources(i === 0 ? ['local'] : i === 2 ? ['database'] : ['web']) }}><PlusOutlined /><span>{['比较文档观点', '开展专题调研', '探索业务数据'][i]}</span></button>)}</div></section>}
+          {hasOlder && <Button className="load-older-turns" size="small" loading={loadingOlder} onClick={() => void loadOlder()}>加载更早的问答</Button>}
+          {[...runs].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)).map(turn => <ConversationTurn key={turn.id} run={turn} selected={selectedRun?.id === turn.id} busy={busy} running={running} onSelect={() => selectResult(turn.id)} onControl={(action, target) => void controlRun(action, target)} />)}
+          {id && !run && !loading && !!history.length && <article className="legacy-history"><Tag>历史会话</Tag>{history.map(m => <section key={m.id}><h3>{m.role === 'user' ? '你的问题' : '助手回复'}</h3><Report content={m.content} /></section>)}</article>}
+          {id && !run && !loading && !history.length && !connectionError && <div className="conversation-welcome"><h2>开始这次研究</h2><p>在下方输入主题，成果将在右侧呈现。</p></div>}
+        </div>
+        <div className="conversation-compose-area"><section className="research-composer">
+          <Input.TextArea aria-label="研究问题" value={query} onChange={e => setQuery(e.target.value)} autoSize={{ minRows: 3, maxRows: 7 }} placeholder={id ? '继续追问，或提出新的研究要求…' : '描述你想研究的主题…'} disabled={running} maxLength={8000} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') void submit() }} />
+          <div className="composer-footer"><div className="composer-tools">
+            <SourcePicker sources={sources} onToggle={toggleSource} kbs={kbs} kbIds={kbIds} onKbsChange={setKbIds} useMemory={useMemory} onMemoryChange={setUseMemory} disabled={running} />
+            <Select aria-label="研究模式" value={mode} disabled={running} onChange={value => { setMode(value); if (value === 'sql') toggleSource('database', true) }} variant="borderless" options={[{ value: 'research', label: '深度研究' }, { value: 'auto', label: '自动识别' }, { value: 'answer', label: '简洁问答' }, { value: 'sql', label: '数据库查询' }]} />
+          </div><div className="composer-submit"><Button type="primary" shape="circle" aria-label={running ? '停止研究' : id ? '发送追问' : '开始研究'} title={running ? '停止研究' : '发送问题（Ctrl + Enter）'} icon={running ? <StopOutlined /> : <ArrowUpOutlined />} loading={busy} disabled={!running && (!query.trim() || loading)} onClick={() => running ? void controlRun('cancel') : void submit()} /></div></div>
+        </section><p className="composer-footnote">{running ? '研究在后台进行，切换页面不会中断' : 'Ctrl / ⌘ + Enter 发送 · 成果在右侧查看'}</p></div>
+      </aside>
+      <ResultWorkbench run={selectedRun} runs={runs} onSelect={selectResult} onEvidence={setEvidence} />
     </div>
-    <Drawer title={evidence ? `[${evidence.id}] ${evidence.title}` : '研究证据'} open={!!evidence} onClose={() => setEvidence(null)} width={640}>
+    <Drawer title={evidence ? `[${evidence.id}] ${evidence.title}` : '研究证据'} open={!!evidence} onClose={() => setEvidence(null)} width={Math.min(640, window.innerWidth)}>
       {evidence && <><Tag>{evidence.source === 'database' ? '查询时的结果快照' : '检索原文摘录'}</Tag>{evidence.retrieved_at && <p>采集时间：{evidence.retrieved_at}</p>}{evidence.sql && <pre className="evidence-content">{evidence.sql}</pre>}<pre className="evidence-content">{evidence.content}</pre>{evidence.source !== 'database' && <Button onClick={() => openSource(evidence.url)}>打开来源</Button>}</>}
     </Drawer>
-  </main>
+  </main></ConfigProvider>
 }
