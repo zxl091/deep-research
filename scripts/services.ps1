@@ -8,7 +8,8 @@ $script:Containers = @('industry_postgres','industry_redis','industry_etcd','ind
 function Read-ServiceState {
     $state = @{ backend = $null; frontend = $null }
     if (Test-Path -LiteralPath $script:StatePath) {
-        $saved = Get-Content -LiteralPath $script:StatePath -Raw | ConvertFrom-Json
+        # PowerShell 7 writes BOM-less UTF-8; Windows PowerShell 5.1 otherwise reads ANSI.
+        $saved = Get-Content -LiteralPath $script:StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
         $state.backend = $saved.backend
         $state.frontend = $saved.frontend
     }
